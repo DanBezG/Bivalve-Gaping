@@ -1,0 +1,253 @@
+---
+title: "Bivalves_Analysis"
+author: "Dan Bez Golanski"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+##Functions
+
+```{r}
+# The function takes datetime data that was saved as text in csv/xlsx file and convert it to POSIxlt, can handle combined data including both numeric and non numeric datetime
+Convert_time_csv <- function(data, final_format, initial_format="ymd HMS",correct_time=T ) {
+  temp_data<-data
+  #for data saved as numeric in csv
+  temp_data<-as.numeric(temp_data)
+  temp_data<-as_datetime(as_date(temp_data, origin = "1899-12-30"), tz = Sys.timezone())
+  #for data not saved as numeric in csv
+  na_index<-which(is.na(temp_data))
+  if(length(na_index)!=length(data))
+  {
+    for (i in na_index) {
+      temp_data[i]<-parse_date_time(data[i],orders = initial_format,truncated = 3)
+    }
+  } else # if all data is character
+  {
+    temp_data<-parse_date_time(data,orders = initial_format,truncated = 3)
+  }
+  temp_data <- as.POSIXlt(temp_data)
+  if(correct_time)
+  {
+    #correct time that rounded wrongly because it was numeric
+    for (row_num in 1:length(temp_data)) {
+    temptime<-unclass(temp_data[row_num])
+    tempsec<-temptime$sec
+    if (tempsec>58) {
+      temp_data[row_num]<-temp_data[row_num]+1
+      }
+    }
+  }
+  temp_data<-strftime(temp_data,format = final_format)
+  return(temp_data)
+}
+
+# This functions gets a bivalve df and returns it after calculate the different metrics for a given time interval
+df_cut_times <- function(biv_df,date_col_num,break_interval,date_format) {
+  biv_df[,date_col_num] <- parse_date_time(biv_df[,date_col_num],orders = date_format)
+  biv_df$group <- cut(biv_df[,date_col_num], breaks= break_interval)
+  biv_df_cut_time <-biv_df %>%
+  group_by(Deployment.number,Biv_num,group) %>%
+  summarise(biv_open_interval_perc=mean(biv_open_percent),biv_open_interval=mean(biv_open),per99.9=mean(percentile.99))
+  return(biv_df_cut_time)
+}
+```
+
+##packages
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(openxlsx)
+library(tidyr)
+library(GGally)
+library(Hmisc)
+```
+
+##load data
+
+```{r}
+
+db<-readRDS("Big_Hobo_database_raw.RDS")
+db2wide<-read.csv("Big_Hobo_database_wide_2min_percent.csv")
+dblong<-read.csv("Big_Hobo_databse_long_raw.csv")
+dblong2<-read.csv("Big_Hobo_databse_long_2min_percent.csv")
+dblong10<-read.csv("Big_Hobo_databse_long_10min_percent&env.csv")
+dblong_hour <- read.csv("Big_Hobo_databse_long_hour_percent.csv")
+```
+
+##Change raw data to long format
+
+```{r}
+col_names<-c("Bivalve.4","Bivalve.6","Bivalve.7","Bivalve.8","Bivalve.0","Bivalve.12","Bivalve.21...","Bivalve.19","Bivavle.15","Bivavle.18","Bivavle.23","Bivavle.22")
+dblong<-gather_(db,"Biv_num","biv_open",col_names,factor_key = T,na.rm = T)
+dblong$Date...Time <- parse_date_time(dblong$Date...Time,orders = "dmy HMS",truncated = 3)
+write.csv(dblong,"Big_Hobo_databse_long_raw.csv")
+```
+
+##Calculate opening percentages
+
+```{r}
+max_deploy<-max(dblong$Deployment.number)
+for (dep_num in 1:max_deploy) {
+  temp_array_deploy<-dblong[dblong$Deployment.number==dep_num,]
+  biv_num<-unique(temp_array_deploy$Biv_num)
+  for (biv_index in 1:length(biv_num)) {
+    temp_array_bivnum <- temp_array_deploy %>%  filter(Biv_num==biv_num[biv_index])
+    per99<-quantile(temp_array_bivnum$biv_open,0.999)
+    dblong[dblong$Deployment.number==dep_num&dblong$Biv_num==biv_num[biv_index],5]<-per99
+    names(dblong)[5]<-"percentile.99"
+  }
+}
+rm(temp_array_bivnum,temp_array_deploy)
+dblong$biv_open_percent<-dblong$biv_open/dblong$percentile.99*100
+write.csv(dblong,"Big_Hobo_databse_long_raw_percent.csv")
+```
+
+##Average by different time intervals
+
+```{r}
+dblong2 <- df_cut_times(dblong,1,"2 min","ymd HMS")
+dblong10 <- df_cut_times(dblong,1,"10 min","ymd HMS")
+dblong_hour <- df_cut_times(dblong,1,"1 hour","ymd HMS")
+dblong_week <- df_cut_times(dblong,1,"1 week","ymd HMS")
+write.csv(dblong2, "Big_Hobo_databse_long_2min_percent.csv")
+write.csv(dblong10, "Big_Hobo_databse_long_10min_percent.csv")
+write.csv(dblong_hour, "Big_Hobo_databse_long_hour_percent.csv")
+write.csv(dblong_week, "Big_Hobo_databse_long_week_percent.csv")
+
+```
+
+## Env_10min
+
+```{r}
+mx<-read.xlsx("BigMx.xlsx")
+obs<-read.xlsx("BigOBS.xlsx")
+#mx
+names(mx)<-c("group","Temp","lux")
+mx$group <- Convert_time_csv(mx$group,"%Y-%m-%d %H:%M:%S")
+write.xlsx(mx,"BigMx.xlsx")
+#merge to the bigHoboDatabase
+dblong10<-merge(dblong10,mx,by="group",all.x = T)
+
+#obs
+names(obs)<-c("group","Turbidity")
+obs$group <- Convert_time_csv(obs$group,"%Y-%m-%d %H:%M:%S")
+write.xlsx(obs,"BigOBS.xlsx")
+#merge to the bigHoboDatabase
+dblong10<-merge(dblong10,obs,by="group",all.x = T)
+
+#change NA to none
+dblong10<-arrange(dblong10,Deployment.number,Biv_num,group)
+dblong10 <- replace(dblong10, is.na(dblong10), "")
+write.csv(dblong10, "Big_Hobo_databse_long_10min_percent&env.csv")
+```
+
+## Env_1hour and add obs and mx 1 hour average
+
+```{r}
+waves<-read.csv("Waves_data.csv")
+currents<-read.csv("Currents_data.csv")
+# waves
+names(waves)[1]<-"group"
+waves$group <- Convert_time_csv(waves$group,final_format = "%Y-%m-%d %H:%M:%S",initial_format = "dmy HM",correct_time = F)
+dblong_hour<-merge(dblong_hour,waves,by="group",all.x = T)
+
+#currents
+currents<-currents %>% filter(Depth..m.==23)
+currents<-currents[,-2]
+names(currents)[1]<-"group"
+currents$group <- Convert_time_csv(currents$group,"%Y-%m-%d %H:%M:%S","dmy HM",correct_time = F)
+dblong_hour<-merge(dblong_hour,currents,by="group",all.x = T)
+
+#change NA to none
+names(dblong_hour)<-c("Date_time","Deployment.number","Bivalve.number","mean.biv.gap.precent","mean.biv.open.degree","percentile.99","Hs[m]","Tp[s]","Dp[deg]","H1/10[m]","Tmean[s]","Current.Speed[cm/sec]","Current.Direction[deg]")
+dblong_hour<-arrange(dblong_hour,Deployment.number,Bivalve.number,Date_time)
+dblong_hour <- replace(dblong_hour, is.na(dblong_hour), "")
+
+#average mx and obs and merge them
+env_10min_to_1hour <- dblong10
+#getting only environmental data and remove duplicates
+env_10min_to_1hour <- env_10min_to_1hour %>% 
+  select(Temp,lux,Turbidity,group) %>% 
+  distinct()
+env_10min_to_1hour$group <- parse_date_time(env_10min_to_1hour$group,orders = "ymd HMS")
+env_10min_to_1hour$Date_time <- cut(env_10min_to_1hour$group, breaks= "1 hour")
+env_10min_to_1hour$Temp <- as.numeric(env_10min_to_1hour$Temp)
+env_10min_to_1hour$lux <- as.numeric(env_10min_to_1hour$lux)
+env_10min_to_1hour$Turbidity <- as.numeric(env_10min_to_1hour$Turbidity)
+env_10min_to_1hour <-env_10min_to_1hour %>%
+  group_by(Date_time) %>%
+  summarise(Temp_1hour_mean=mean(Temp),Lux_1hour_mean=mean(lux),Turbidity_1hour_mean=mean(Turbidity))
+dblong_hour<-merge(dblong_hour,env_10min_to_1hour,by="Date_time",all.x = T)
+rm(env_10min_to_1hour)
+write.csv(dblong_hour, "Big_Hobo_databse_long_hour_percent&env.csv")
+```
+
+## Env_1week - to complete!
+```{r}
+reco<-read.csv("RECO_Database_2022-2023.csv")
+reco$mm.dd.yyyy<-parse_date_time(reco$mm.dd.yyyy,orders = "dmy",truncated = 3)
+reco$group <- cut(reco$mm.dd.yyyy, breaks="week")
+reco <- reco %>%filter(Station=="ST3")# %>%
+  # select(group,Cal.Chl...ug.L.,Depth..m.) 
+  
+```
+
+##Bivalves correlations
+```{r}
+#Bivalves correlations
+dbwide2 <- dblong2 %>% select(group,Deployment.number,Biv_num,biv_open_interval_perc) %>% 
+  spread(key = Biv_num,value = biv_open_interval_perc)
+write.csv(dbwide2,"Big_Hobo_database_wide_2min_percent.csv")
+deployments <- unique(dbwide2$Deployment.number)
+bivalve_corr <- data.frame(dep_num=integer(),
+                           corr_values=double(),
+                           p_values=double(),
+                           n=integer()
+)
+for (dep in deployments) {
+temp_dep <- dbwide2 %>% filter(Deployment.number==dep)
+#remove bivalves weren't deployed in the specific deployment
+temp_dep <- temp_dep[,colSums(!is.na(temp_dep))>0]
+# remove datetime and deployment number
+temp_dep <- temp_dep[-1:-2]
+#getting correlation, p-values and n and convert them to data frame
+temp_corr <- rcorr(as.matrix(temp_dep),type = "pearson")
+temp_corr <-data.frame(dep_num = paste("Deployment",dep),
+                       corr_values = as.vector(temp_corr[["r"]][upper.tri(temp_corr[["r"]])]),
+                       p_values = as.vector(temp_corr[["P"]][upper.tri(temp_corr[["P"]])]),
+                       n = as.vector(temp_corr[["n"]][upper.tri(temp_corr[["n"]])])
+                       )
+bivalve_corr <- rbind(bivalve_corr,temp_corr)                       
+}
+rm(temp_corr,temp_dep)
+write.csv(bivalve_corr,"Bivalves_correlations.csv")
+hist(bivalve_corr$corr_values)
+
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
