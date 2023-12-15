@@ -62,6 +62,7 @@ library(openxlsx)
 library(tidyr)
 library(GGally)
 library(Hmisc)
+library(suntools)
 ```
 
 ##load data
@@ -193,6 +194,16 @@ reco <- reco %>%filter(Station=="ST3")# %>%
   # select(group,Cal.Chl...ug.L.,Depth..m.) 
   
 ```
+
+##sunrise.set calculations
+```{r}
+rei_point_crds <- c(32.4015190,34.8579670)
+dblong2$group <- parse_date_time(dblong2$group,orders = "ymd HMS")
+dblong2$sunrise <- sunriset(matrix(rei_point_crds,nrow=1), dblong2$group,direction = "sunrise", POSIXct.out = T)$time
+dblong2$sunset <- sunriset(matrix(rei_point_crds,nrow=1), dblong2$group,direction = "sunset", POSIXct.out = T)$time
+##mistake in the time calculated
+```
+
 
 ##Bivalves correlations
 ```{r}
