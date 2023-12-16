@@ -158,6 +158,7 @@ dblong_hour<-merge(dblong_hour,waves,by="group",all.x = T)
 rm(waves)
 
 #currents
+#get only bottom currents
 currents<-currents %>% filter(Depth..m.==23)
 currents<-currents[,-2]
 names(currents)[1]<-"group"
@@ -342,6 +343,14 @@ correlation_hitsogram <- ggplot(bivalve_corr, aes(corr_values)) +
 
 correlation_boxplot <- ggplot(bivalve_corr, aes(corr_values))+geom_boxplot(aes(y=corr_values,x=NULL))+
   geom_hline(yintercept = 0, linetype = "dashed", color = "red", size = 1) +coord_flip()
+
+layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(1,8))
+ 
+# Draw the boxplot and the histogram 
+par(mar=c(0, 3.1, 1.1, 2.1))
+boxplot(bivalve_corr$corr_values , horizontal=TRUE , ylim=c(-1,1), xaxt="n" , col=rgb(0.8,0.8,0,0.5) , frame=F)
+par(mar=c(4, 3.1, 1.1, 2.1))
+hist(bivalve_corr$corr_values , breaks=40 , col=rgb(0.2,0.8,0.5,0.5) , border=F , main="" , xlab="Bivalves correlations", xlim=c(-1,1))
 
 ```
 
