@@ -61,8 +61,10 @@ library(lubridate)
 library(openxlsx)
 library(tidyr)
 library(GGally)
+library(scales)
 library(Hmisc)
-library(suntools)
+library(StreamMetabolism)
+
 ```
 
 ##load data
@@ -122,8 +124,8 @@ write.csv(dblong_week, "Big_Hobo_databse_long_week_percent.csv")
 ## Env_10min
 
 ```{r}
-mx<-read.xlsx("BigMx.xlsx")
-obs<-read.xlsx("BigOBS.xlsx")
+mx<-readRDS("BigMx.RDS")
+obs<-readRDS("BigOBS.RDS")
 #mx
 names(mx)<-c("group","Temp","lux")
 mx$group <- Convert_time_csv(mx$group,"%Y-%m-%d %H:%M:%S")
@@ -147,12 +149,13 @@ write.csv(dblong10, "Big_Hobo_databse_long_10min_percent&env.csv")
 ## Env_1hour and add obs and mx 1 hour average
 
 ```{r}
-waves<-read.csv("Waves_data.csv")
-currents<-read.csv("Currents_data.csv")
+waves<-readRDS("Waves_data.RDS")
+currents<-readRDS("Currents_data.RDS")
 # waves
 names(waves)[1]<-"group"
 waves$group <- Convert_time_csv(waves$group,final_format = "%Y-%m-%d %H:%M:%S",initial_format = "dmy HM",correct_time = F)
 dblong_hour<-merge(dblong_hour,waves,by="group",all.x = T)
+rm(waves)
 
 #currents
 currents<-currents %>% filter(Depth..m.==23)
@@ -160,6 +163,7 @@ currents<-currents[,-2]
 names(currents)[1]<-"group"
 currents$group <- Convert_time_csv(currents$group,"%Y-%m-%d %H:%M:%S","dmy HM",correct_time = F)
 dblong_hour<-merge(dblong_hour,currents,by="group",all.x = T)
+rm(currents)
 
 #change NA to none
 names(dblong_hour)<-c("Date_time","Deployment.number","Bivalve.number","mean.biv.gap.precent","mean.biv.open.degree","percentile.99","Hs[m]","Tp[s]","Dp[deg]","H1/10[m]","Tmean[s]","Current.Speed[cm/sec]","Current.Direction[deg]")
@@ -195,13 +199,73 @@ reco <- reco %>%filter(Station=="ST3")# %>%
   
 ```
 
-##sunrise.set calculations
+##2min sunrise.set and Day/Night calculations
 ```{r}
+##Sunrise.set calculations
+
+#sampling point coordinates
 rei_point_crds <- c(32.4015190,34.8579670)
-dblong2$group <- parse_date_time(dblong2$group,orders = "ymd HMS")
-dblong2$sunrise <- sunriset(matrix(rei_point_crds,nrow=1), dblong2$group,direction = "sunrise", POSIXct.out = T)$time
-dblong2$sunset <- sunriset(matrix(rei_point_crds,nrow=1), dblong2$group,direction = "sunset", POSIXct.out = T)$time
-##mistake in the time calculated
+dblong2$group<- parse_date_time(dblong2$group,orders = "ymd HMS")
+#creating column represent only the sampling dates
+dblong2$Date <- as.Date(dblong2$group)
+sampling_dates <- unique(dblong2$Date)
+#create a data frame for sunrise.set for all the sampling dates
+temp_date <- data.frame(matrix(NA,ncol=3,nrow=length(sampling_dates)))
+names(temp_date) <- c("Date","Sunrise","Sunset")
+temp_date$Date <- sampling_dates
+rm(sampling_dates)
+#calculate sunrise.set
+for (day in 1:length(temp_date$Date)) {
+  sunrise_set <- sunrise.set(rei_point_crds[1],rei_point_crds[2], as.Date(temp_date$Date[day]),timezone = "Asia/Jerusalem")
+  temp_date$Sunrise[day] <- as.POSIXct(sunrise_set$sunrise)
+  temp_date$Sunset[day] <- as.POSIXct(sunrise_set$sunset)
+}
+#change from numeric to datetime
+temp_date$Sunrise <- as.POSIXct(as.numeric(temp_date$Sunrise),origin='1970-01-01')
+temp_date$Sunset <- as.POSIXct(as.numeric(temp_date$Sunset),origin='1970-01-01')
+temp_date$Sunrise <- force_tz(temp_date$Sunrise,tzone = "UTC") 
+temp_date$Sunset <- force_tz(temp_date$Sunset,tzone = "UTC") 
+
+dblong2<-merge(dblong2,temp_date,by="Date",all.x = T)
+dblong2$Date <- NULL
+rm(temp_date)
+
+
+##Day.Night Calculations
+dblong2$Day_Night <- ifelse(dblong2$group>dblong2$Sunrise & dblong2$group<dblong2$Sunset,"Day","Night")
+#create new data frame composing only from distinct date times
+temp_sun <- dblong2 %>% select(group,Sunrise,Sunset,Day_Night,Deployment.number) %>% distinct()
+#calculate time difference from sunset for the day times
+temp_sun$diff_sunset[temp_sun$Day_Night=="Day"] <- difftime(temp_sun$group[temp_sun$Day_Night=="Day"],temp_sun$Sunset[temp_sun$Day_Night=="Day"],units = "hours")
+#calculate time difference for night times, complicated because the change of the dates at midnight
+temp_night <- temp_sun[temp_sun$Day_Night=="Night",]
+temp_night <- temp_night %>% arrange(group)
+#calculate for times before midnight
+temp_night$diff_sunset[as.numeric(format(temp_night$group,"%H"))>10] <-difftime(temp_night$group[ as.numeric(format(temp_night$group,"%H"))>10],temp_night$Sunset[as.numeric(format(temp_night$group ,"%H"))>10],units = "hours")
+
+#calculate time difference for night times after midnight
+dep_num <- 0
+for (row_num in 1:dim(temp_night)[1]) {
+  if (!is.na(temp_night$diff_sunset[row_num])) {
+    #save the sunset time of the date before midnight
+    temp_sunset <- temp_night$Sunset[row_num]
+    #save the deployment number to avoid deployments mixing
+    dep_num <- temp_night$Deployment.number[row_num]
+  } else if (is.na(temp_night$diff_sunset[row_num]) & temp_night$Deployment.number[row_num]==dep_num) {
+    temp_night$diff_sunset[row_num] <- difftime(temp_night$group[row_num],temp_sunset)
+  }
+}
+#merging all the  data frames together
+temp_night <- temp_night %>% select(group,diff_sunset)
+#merging two partly full columns into one
+temp_sun <- temp_sun %>% left_join(y,by="group") %>%
+  mutate(diff_sunset = ifelse(is.na(diff_sunset.x),diff_sunset.y,diff_sunset.x)) %>% 
+  select(-diff_sunset.x,-diff_sunset.y)
+temp_sun <- temp_sun %>% select(group,diff_sunset) %>% arrange(group)
+dblong2 <- merge(dblong2,temp_sun,by = "group",all.x = T)
+rm(temp_sun)
+rm(temp_night)
+saveRDS(dblong2,"Big_Hobo_database_long_2min_percent&sun.RDS")
 ```
 
 
@@ -239,26 +303,45 @@ hist(bivalve_corr$corr_values)
 ```
 
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
-```
-
 ## Including Plots
 
-You can also embed plots, for example:
+```{r}
+#seasonal and daily trend along bivalves - doesn't work properly!
+dblong2$group <- parse_date_time(dblong2$group,orders = "ymd HMS")
+dblong2$Month <- format(dblong2$group,"%Y-%m")
+months_gaping_graph <- ggplot(dblong2,aes(x=group,y=biv_open_interval_perc))+
+  geom_point(aes(color="gray89",size=0.1,alpha=0.5))+
+  geom_smooth(se=T,size=2,color="blue")+
+  scale_x_time(labels = time_format("%H:%M"),breaks = "4 hours")+
+  scale_y_continuous(limits = c(0,100))+
+  facet_wrap(~Month, scales = "free_x",ncol = length(unique(dblong2$Month))) +
+  labs(x = "Time of Day",
+       y = "Gaping Percent")
+  months_gaping_graph
+  
+#Day Night difference - doesn't work!
+  dblong2$Day_Night <- factor(dblong2$Day_Night)
+Day_Night_gaping_graph <- ggplot(dblong2, aes(x = group, y = biv_open_interval_perc, color = Day_Night)) +
+    geom_point(size = 0.1, alpha = 0.5, color = "gray") +
+    geom_smooth(se = T, size = 1.5, aes(group = Day_Night), span = 0.2,fill="lightblue")+ 
+    scale_x_time(labels = time_format("%H:%M"),breaks = "4 hours")+
+    scale_y_continuous(limits = c(0,100))+
+    labs(title = "Bivalve Open Interval Percentage Over Time",
+         x = "Time",
+         y = "Bivalve Open Interval Percentage",
+         color = "Day/Night") 
+Day_Night_gaping_graph
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+#bivalve correlation graph - not on top of each other and not beautiful!
+correlation_hitsogram <- ggplot(bivalve_corr, aes(corr_values)) +
+  geom_histogram(binwidth = 0.1,breaks = seq(-1, 1, by = 0.1), fill = "lightblue", color = "black") +
+  scale_x_continuous(limits = c(-1,1))+
+  labs(title = "Distribution of corr_values with Box Plot",
+       x = "Correlation values",
+       y = "Count") 
+
+correlation_boxplot <- ggplot(bivalve_corr, aes(corr_values))+geom_boxplot(aes(y=corr_values,x=NULL))+
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", size = 1) +coord_flip()
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
