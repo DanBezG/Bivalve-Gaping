@@ -64,6 +64,7 @@ library(GGally)
 library(scales)
 library(Hmisc)
 library(StreamMetabolism)
+library(mgcv)
 
 ```
 
@@ -76,7 +77,7 @@ db2wide<-read.csv("Big_Hobo_database_wide_2min_percent.csv")
 dblong<-read.csv("Big_Hobo_databse_long_raw.csv")
 dblong2<-read.csv("Big_Hobo_databse_long_2min_percent.csv")
 dblong10<-read.csv("Big_Hobo_databse_long_10min_percent&env.csv")
-dblong_hour <- read.csv("Big_Hobo_databse_long_hour_percent.csv")
+dblong_hour <- read.csv("Big_Hobo_databse_long_hour_percent&env.csv")
 ```
 
 ##Change raw data to long format
@@ -190,14 +191,26 @@ rm(env_10min_to_1hour)
 write.csv(dblong_hour, "Big_Hobo_databse_long_hour_percent&env.csv")
 ```
 
-## Env_1week - to complete!
+## Env_1week 
 ```{r}
-reco<-read.csv("RECO_Database_2022-2023.csv")
-reco$mm.dd.yyyy<-parse_date_time(reco$mm.dd.yyyy,orders = "dmy",truncated = 3)
+reco<-read.csv("RECO_Database - Data.csv")
+reco$mm.dd.yyyy<-parse_date_time(reco$mm.dd.yyyy,orders = "mdy",truncated = 3)
+#divide into chucks of weeks
 reco$group <- cut(reco$mm.dd.yyyy, breaks="week")
-reco <- reco %>%filter(Station=="ST3")# %>%
-  # select(group,Cal.Chl...ug.L.,Depth..m.) 
-  
+#filter to only shallow station 
+reco <- reco %>%filter(Station=="ST3") %>%
+  select(group,Cal.Chl...ug.L.,Depth..m.) %>% 
+  group_by(group)
+reco <- na.omit(reco) 
+#summarise to all depths
+reco <- reco %>% 
+  summarise(Chl=mean(Cal.Chl...ug.L.)) %>% 
+  arrange(group)
+#make sure the group columns are the same
+reco$group <- as.POSIXct(reco$group,format = "%Y-%m-%d")
+dblong_week$group <- as.POSIXct(dblong_week$group,format = "%Y-%m-%d")
+dblong_week <- merge(dblong_week,reco,by="group",all.x = T)
+
 ```
 
 ##2min sunrise.set and Day/Night calculations
@@ -304,33 +317,283 @@ hist(bivalve_corr$corr_values)
 ```
 
 
+
+##Environmental correlations
+```{r}
+#Environmental correlations - hourly
+#wide bivalves
+dbwide_hour <- dblong_hour %>% select(Date_time,Deployment.number,Bivalve.number,mean.biv.gap.precent) %>%
+  spread(key = Bivalve.number,value = mean.biv.gap.precent)
+#wide environment
+environment_wide <- dblong_hour %>% select(Date_time,Deployment.number,Hs.m.,Tp.s.,Dp.deg.,H1.10.m.,Tmean.s.,Current.Speed.cm.sec.,Current.Direction.deg.,Temp_1hour_mean,Lux_1hour_mean,Turbidity_1hour_mean) %>% 
+  distinct()
+#get all the deployments
+deployments <- unique(dbwide_hour$Deployment.number)
+#prepare the big data frame
+env_corr <- data.frame(dep_num=integer(),
+                       biv_num=character(),
+                       environmental_factor=character(),
+                       corr_values=double(),
+                       p_values=double(),
+                       n=integer()
+)
+
+for (dep in deployments) {
+temp_dep <- dbwide_hour %>% filter(Deployment.number==dep)
+#remove bivalves weren't deployed in the specific deployment
+temp_dep <- temp_dep[,colSums(!is.na(temp_dep))>0]
+# get the bivalves names
+temp_bivalves_id <- names(temp_dep)[3:dim(temp_dep)[2]]
+#filter environmental data to a specific deployment
+temp_env <- environment_wide %>% filter(Deployment.number==dep)
+temp_env <- temp_env %>% select(-Deployment.number)
+for (biv_num in temp_bivalves_id) {
+  temp_biv <- temp_dep[,c(1,which(colnames(temp_dep)==biv_num ))]
+  temp_biv <- merge(temp_biv,temp_env,by="Date_time",all.x=T)
+  #remove datetime
+  temp_biv <- temp_biv[-1]
+  #getting correlation, p-values and n and convert them to data frame
+  temp_corr <- rcorr(as.matrix(temp_biv),type = "pearson")
+  temp_corr <-data.frame(dep_num = paste("Deployment",dep),
+                       biv_num=biv_num,
+                       #starting from 2 to avoid autocorrelation with the bivalve
+                       #getting the environmental factors names
+                       environmental_factor=colnames(temp_corr[["r"]])[2:length(colnames(temp_corr[["r"]]))],
+                       corr_values = as.vector(temp_corr[["r"]][1,2:dim(temp_corr[["r"]])[2]]),
+                       p_values = as.vector(temp_corr[["P"]][1,2:dim(temp_corr[["P"]])[2]]),
+                       n = as.vector(temp_corr[["n"]][1,2:dim(temp_corr[["n"]])[2]])
+                       )
+env_corr <- rbind(env_corr,temp_corr)
+  }
+}
+env_corr <- na.omit(env_corr)
+rm(temp_corr,temp_dep)
+write.csv(env_corr,"Environmental_correlations.csv")
+hist(env_corr$corr_values)
+
+
+
+##Environmental correlations - weekly (chl) - poor reco 
+#wide bivalves
+dbwide_week <- dblong_week %>% select(group,Deployment.number,Biv_num,biv_open_interval_perc) %>%
+  spread(key = Biv_num,value = biv_open_interval_perc)
+#wide environment
+environment_week_wide <- dblong_week %>% select(group,Deployment.number,Chl) %>% 
+  distinct()
+#get all the deployments
+deployments <- unique(dbwide_week$Deployment.number)
+#prepare the big data frame
+env_corr_week <- data.frame(dep_num=integer(),
+                       biv_num=character(),
+                       environmental_factor=character(),
+                       corr_values=double(),
+                       p_values=double(),
+                       n=integer()
+)
+
+for (dep in deployments) {
+temp_dep <- dbwide_week %>% filter(Deployment.number==dep)
+#remove bivalves weren't deployed in the specific deployment
+temp_dep <- temp_dep[,colSums(!is.na(temp_dep))>0]
+# get the bivalves names
+temp_bivalves_id <- names(temp_dep)[3:dim(temp_dep)[2]]
+#filter environmental data to a specific deployment
+temp_env <- environment_wide %>% filter(Deployment.number==dep)
+temp_env <- temp_env %>% select(-Deployment.number)
+if(length(which(!is.na(temp_env$Chl)))>3)
+{
+  for (biv_num in temp_bivalves_id) {
+    temp_biv <- temp_dep[,c(1,which(colnames(temp_dep)==biv_num ))]
+    temp_biv <- merge(temp_biv,temp_env,by="group",all.x=T)
+    #remove datetime
+    temp_biv <- temp_biv[-1]
+    #getting correlation, p-values and n and convert them to data frame
+    temp_corr <- rcorr(as.matrix(temp_biv),type = "pearson")
+    temp_corr <-data.frame(dep_num = paste("Deployment",dep),
+                       biv_num=biv_num,
+                       #starting from 2 to avoid autocorrelation with the bivalve
+                       #getting the environmental factors names
+                       environmental_factor="Chl",
+                       corr_values = as.vector(temp_corr[["r"]][1,2:dim(temp_corr[["r"]])[2]]),
+                       p_values = as.vector(temp_corr[["P"]][1,2:dim(temp_corr[["P"]])[2]]),
+                       n = as.vector(temp_corr[["n"]][1,2:dim(temp_corr[["n"]])[2]])
+                       )
+    env_corr_week <- rbind(env_corr_week,temp_corr)
+    }
+  }
+}
+env_corr_week <- na.omit(env_corr_week)
+rm(temp_corr,temp_dep)
+write.csv(env_corr_week,"Chl_correlations_week.csv")
+hist(env_corr_week$corr_values)
+
+
+
+
+```
+
+
+
+##Bivalve opening times(how much time was open in whole duration or daily)
+```{r}
+###check mean and max opening time for each bivalve for the whole deployments duration
+bivalves_names<-unique(dblong2$Biv_num)
+#prepare the dataframe
+bivalves_opening_times<-data.frame(
+  bivalve_name=character(),
+  mean.opening.time=double(),
+  max.opening.time=double(),
+  n=double(),
+  sd=double(),
+  se=double(),
+  limit=double()
+)
+#Check different limits defined as closed
+precent_limits<-c(1,5,10,15,20,30)
+#loop for all limits
+#index for which precent limit iteration are we in
+limit_iter_num <- 0 
+for (limit in precent_limits) {
+  #loop for all bivalves
+  for (biv_num in 1:length(bivalves_names)) {
+    #filter by bivalve
+    temp_biv<-filter(dblong2,dblong2$Biv_num==bivalves_names[biv_num])
+    open_events<-c()
+    bivalves_opening_times[biv_num+limit_iter_num,]<-NA
+    bivalves_opening_times$bivalve_name[biv_num+limit_iter_num]<-bivalves_names[biv_num]
+    bivalves_opening_times$limit[biv_num+limit_iter_num]<-limit
+    open_index<-1
+    total_time<-0#for computing  total time of measurement per bivalve
+    sum_time_open<-0
+    #loop for each bivalve
+    for (row in 1:dim(temp_biv)[1]) {
+      total_time<-total_time+2
+      #check if the bivalve closed or if we passed deployment or passed day
+      if(temp_biv$biv_open_interval_perc[row]<limit || (row!=1 && temp_biv$Deployment.number[row]!=temp_biv$Deployment.number[row-1]))
+      {
+        #check if it was open before
+        if(sum_time_open>0)
+        {
+          #initializing the next open event
+          open_events[open_index]<-NA
+          #add the opening time to the series of all the gaping events
+          open_events[open_index]<-sum_time_open
+          #increase the number of gaping events
+          open_index<-open_index+1
+        }
+        #zeroing the counter of the time the bivalve is open 
+        sum_time_open<-0
+      } 
+      else
+      {
+        #increase the time of gaping by 2 because each row represent 2 minutes
+        sum_time_open<-sum_time_open+2
+      }
+    } 
+    #maximum time open continously during 1 deployment
+    bivalves_opening_times$max.opening.time[biv_num+limit_iter_num]<-max(open_events)
+    #mean time open continously during 1 deployment
+    bivalves_opening_times$mean.opening.time[biv_num+limit_iter_num]<-mean(open_events) 
+    #amount of distinct opening events
+    bivalves_opening_times$n[biv_num+limit_iter_num]<-length(open_events)
+    bivalves_opening_times$sd[biv_num+limit_iter_num]<-sd(open_events)
+    bivalves_opening_times$se[biv_num+limit_iter_num]<-bivalves_opening_times$sd[biv_num+limit_iter_num]/sqrt(bivalves_opening_times$n[biv_num+limit_iter_num])
+    #precent of time open in compare to the whole deployment duration of the bivalve
+    bivalves_opening_times$total_time_open[biv_num+limit_iter_num]<-sum(open_events)/total_time*100
+    #for computing total time open percetange for each bivalve
+  }
+  limit_iter_num<-limit_iter_num+12
+}
+write.csv(bivalves_opening_times,"Bivalves_open_all_duration.csv")
+
+##check mean and max opening time for each bivalve for the each day
+bivalves_daily_open <- data.frame(
+  bivalve_name=character(),
+  date=Date(),
+  open_time_ratio=double(),
+  n=integer(),
+  limit=integer()
+)
+#loop for all bivalve
+limit_iter_num<-0 #index for precent limits
+for (limit in precent_limits) {
+  for (biv_num in 1:length(bivalves_names)) {
+    #filter by bivalve
+    temp_biv<-dplyr::filter(dblong2,dblong2$Biv_num==bivalves_names[biv_num])
+    temp_biv$date<-as.Date(temp_biv$group)
+    dates<-unique(temp_biv$date)
+    open_times<-c(NA,length(dates))
+    #how much time of the day was covered
+    data_in_day <- c(NA,length(dates))
+    #loop for all dates
+    for (date_num in 1:length(dates)) {
+      temp_date<-dplyr::filter(temp_biv,temp_biv$date==dates[date_num])
+      sum_time<-0
+      #loop for each day
+      for (row in 1:dim(temp_date)[1]) {
+        if(temp_date$biv_open_interval_perc[row]>limit ){
+          sum_time<-sum_time+2
+        } 
+      }
+      open_times[date_num]<-sum_time/(24*60)*100
+      data_in_day[date_num] <- dim(temp_date)[1]
+    }
+    temp_daily_open <- data.frame(
+      bivalve_name=bivalves_names[biv_num],
+      date=dates,
+      open_time_ratio=open_times,
+      n=data_in_day,
+      limit=limit
+    )
+    bivalves_daily_open <- rbind(bivalves_daily_open,temp_daily_open)
+  }
+  limit_iter_num<-limit_iter_num+12
+  write.csv(bivalves_daily_open,"Bivalves_daily_open.csv")
+}
+```
+
 ## Including Plots
 
 ```{r}
-#seasonal and daily trend along bivalves - doesn't work properly!
+#seasonal and daily trend along bivalves - Work!
 dblong2$group <- parse_date_time(dblong2$group,orders = "ymd HMS")
 dblong2$Month <- format(dblong2$group,"%Y-%m")
-months_gaping_graph <- ggplot(dblong2,aes(x=group,y=biv_open_interval_perc))+
-  geom_point(aes(color="gray89",size=0.1,alpha=0.5))+
-  geom_smooth(se=T,size=2,color="blue")+
-  scale_x_time(labels = time_format("%H:%M"),breaks = "4 hours")+
+dblong2$TimeofDay <- as.POSIXct(hms::as_hms(dblong2$group)) 
+months_gaping_graph <- ggplot(dblong2, aes(x = TimeofDay, y = biv_open_interval_perc))+
+  geom_point(color = "grey", size = 0.1)+
+  geom_smooth(linewidth = 2, color = "blue",se = T,fill="red")+
+  # geom_spline(spar = 0.05, linewidth = 2, color = "blue")+
+  scale_x_datetime( date_breaks = "4 hours",date_labels = "%H:%M") +
   scale_y_continuous(limits = c(0,100))+
-  facet_wrap(~Month, scales = "free_x",ncol = length(unique(dblong2$Month))) +
+  facet_wrap(~Month, scales = "free_x", ncol = length(unique(dblong2$Month))) +
   labs(x = "Time of Day",
-       y = "Gaping Percent")
+       y = "Gaping Percent") +
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        strip.background = element_rect(fill="white",color="black", linewidth = 1.5, linetype="solid"),
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_blank(),
+        axis.text.y = element_text(size = 14),
+        axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+        strip.text = element_text(size = 14),
+        legend.text = element_text(size = 14))
   months_gaping_graph
   
-#Day Night difference - doesn't work!
-  dblong2$Day_Night <- factor(dblong2$Day_Night)
-Day_Night_gaping_graph <- ggplot(dblong2, aes(x = group, y = biv_open_interval_perc, color = Day_Night)) +
+#Day Night difference -  Work only for 0 to 100 range!
+  Day_Night_gaping_graph <- ggplot(dblong2, aes(x = diff_sunset, y = biv_open_interval_perc)) +
     geom_point(size = 0.1, alpha = 0.5, color = "gray") +
-    geom_smooth(se = T, size = 1.5, aes(group = Day_Night), span = 0.2,fill="lightblue")+ 
-    scale_x_time(labels = time_format("%H:%M"),breaks = "4 hours")+
-    scale_y_continuous(limits = c(0,100))+
+    geom_smooth(data = subset(dblong2,diff_sunset>0), size = 1.5,color = "blue", se =T,fill="yellow")+ 
+    geom_smooth(data = subset(dblong2,diff_sunset<0), size = 1.5,color = "red",se =T,fill="yellow")+
+    geom_vline(xintercept = 0,linetype="dashed",color="black")+
+    scale_y_continuous(limits = c(0,100
+                                  ))+
+    scale_x_continuous(limits = c(-12,12),breaks = seq(-12,12,2))+
     labs(title = "Bivalve Open Interval Percentage Over Time",
          x = "Time",
-         y = "Bivalve Open Interval Percentage",
-         color = "Day/Night") 
+         y = "Bivalve Open Percentage") 
 Day_Night_gaping_graph
 
 #bivalve correlation graph - not on top of each other and not beautiful!
@@ -350,7 +613,7 @@ layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(1,8))
 par(mar=c(0, 3.1, 1.1, 2.1))
 boxplot(bivalve_corr$corr_values , horizontal=TRUE , ylim=c(-1,1), xaxt="n" , col=rgb(0.8,0.8,0,0.5) , frame=F)
 par(mar=c(4, 3.1, 1.1, 2.1))
-hist(bivalve_corr$corr_values , breaks=40 , col=rgb(0.2,0.8,0.5,0.5) , border=F , main="" , xlab="Bivalves correlations", xlim=c(-1,1))
+hist(bivalve_corr$corr_values , breaks=20 , col=rgb(0.2,0.8,0.5,0.5) , border=F , main="" , xlab="Bivalves correlations", xlim=c(-1,1),ylim = c(0,30))
 
 ```
 
