@@ -60,11 +60,10 @@ library(ggplot2)
 library(lubridate)
 library(openxlsx)
 library(tidyr)
-library(GGally)
 library(scales)
-library(Hmisc)
-library(StreamMetabolism)
-library(mgcv)
+library(Hmisc) # for function rcorr
+library(StreamMetabolism) #for getting sunrise and sunset
+library(patchwork)
 
 ```
 
@@ -114,6 +113,7 @@ write.csv(dblong,"Big_Hobo_databse_long_raw_percent.csv")
 dblong2 <- df_cut_times(dblong,1,"2 min","ymd HMS")
 dblong10 <- df_cut_times(dblong,1,"10 min","ymd HMS")
 dblong_hour <- df_cut_times(dblong,1,"1 hour","ymd HMS")
+dblong_day <- df_cut_times(dblong,1,"1 day","ymd HMS")
 dblong_week <- df_cut_times(dblong,1,"1 week","ymd HMS")
 write.csv(dblong2, "Big_Hobo_databse_long_2min_percent.csv")
 write.csv(dblong10, "Big_Hobo_databse_long_10min_percent.csv")
@@ -148,7 +148,6 @@ write.csv(dblong10, "Big_Hobo_databse_long_10min_percent&env.csv")
 ```
 
 ## Env_1hour and add obs and mx 1 hour average
-
 ```{r}
 waves<-readRDS("Waves_data.RDS")
 currents<-readRDS("Currents_data.RDS")
@@ -172,10 +171,8 @@ names(dblong_hour)<-c("Date_time","Deployment.number","Bivalve.number","mean.biv
 dblong_hour<-arrange(dblong_hour,Deployment.number,Bivalve.number,Date_time)
 dblong_hour <- replace(dblong_hour, is.na(dblong_hour), "")
 
-#average mx and obs and merge them
-env_10min_to_1hour <- dblong10
 #getting only environmental data and remove duplicates
-env_10min_to_1hour <- env_10min_to_1hour %>% 
+env_10min_to_1hour <- dblong10 %>% 
   select(Temp,lux,Turbidity,group) %>% 
   distinct()
 env_10min_to_1hour$group <- parse_date_time(env_10min_to_1hour$group,orders = "ymd HMS")
@@ -191,7 +188,32 @@ rm(env_10min_to_1hour)
 write.csv(dblong_hour, "Big_Hobo_databse_long_hour_percent&env.csv")
 ```
 
-## Env_1week 
+##Env_daily
+```{r}
+env_1day <- dblong10 %>% 
+  select(Temp,lux,Turbidity,group) %>% 
+  distinct()
+env_1day$group <- parse_date_time(env_1day$group,orders = "ymd HMS")
+env_1day$Date_time <- cut(env_1day$group, breaks= "1 day")
+env_1day$Temp <- as.numeric(env_1day$Temp)
+env_1day$lux <- as.numeric(env_1day$lux)
+env_1day$Turbidity <- as.numeric(env_1day$Turbidity)
+env_1day <-env_1day %>%
+  group_by(Date_time) %>%
+  summarise(Temp_1hour_mean=mean(Temp),Lux_1hour_mean=mean(lux),Turbidity_1hour_mean=mean(Turbidity))
+temp_env_1hour <- dblong_hour %>% 
+  select(Date_time,Hs.m.) %>% 
+  distinct()
+temp_env_1hour$Date_time <- parse_date_time(temp_env_1hour$Date_time,orders = "ymd HMS")
+temp_env_1hour$Date_time <- cut(temp_env_1hour$Date_time, breaks= "1 day")
+temp_env_1hour <-temp_env_1hour %>%
+  group_by(Date_time) %>%
+  summarise(Hs_1hour_mean=mean(Hs.m.))
+env_1day <- merge(env_1day,temp_env_1hour,by="Date_time")
+rm(temp_env_1hour)
+```
+
+## Env_1week - reco
 ```{r}
 reco<-read.csv("RECO_Database - Data.csv")
 reco$mm.dd.yyyy<-parse_date_time(reco$mm.dd.yyyy,orders = "mdy",truncated = 3)
@@ -283,9 +305,9 @@ saveRDS(dblong2,"Big_Hobo_database_long_2min_percent&sun.RDS")
 ```
 
 
-##Bivalves correlations
+##Bivalves correlations - per deployment
 ```{r}
-#Bivalves correlations
+#Bivalves correlations - correlation between each bivalve pair in a singe deployment
 dbwide2 <- dblong2 %>% select(group,Deployment.number,Biv_num,biv_open_interval_perc) %>% 
   spread(key = Biv_num,value = biv_open_interval_perc)
 write.csv(dbwide2,"Big_Hobo_database_wide_2min_percent.csv")
@@ -312,15 +334,14 @@ bivalve_corr <- rbind(bivalve_corr,temp_corr)
 }
 rm(temp_corr,temp_dep)
 write.csv(bivalve_corr,"Bivalves_correlations.csv")
-hist(bivalve_corr$corr_values)
-
+hist(biv_corr_hour$corr_values[biv_corr_hour$p_values<0.05],breaks = seq(-1,1,0.1))
 ```
 
 
 
-##Environmental correlations
+##Environmental correlations - per deployment/whole duration/daily_all_bivalves
 ```{r}
-#Environmental correlations - hourly
+#Environmental correlations - hourly include deployments
 #wide bivalves
 dbwide_hour <- dblong_hour %>% select(Date_time,Deployment.number,Bivalve.number,mean.biv.gap.precent) %>%
   spread(key = Bivalve.number,value = mean.biv.gap.precent)
@@ -358,7 +379,8 @@ for (biv_num in temp_bivalves_id) {
                        biv_num=biv_num,
                        #starting from 2 to avoid autocorrelation with the bivalve
                        #getting the environmental factors names
-                       environmental_factor=colnames(temp_corr[["r"]])[2:length(colnames(temp_corr[["r"]]))],
+                       environmental_factor=colnames(temp_corr[["r"]])[2:length(colnames(temp_corr[["r"]])
+                                                                                )],
                        corr_values = as.vector(temp_corr[["r"]][1,2:dim(temp_corr[["r"]])[2]]),
                        p_values = as.vector(temp_corr[["P"]][1,2:dim(temp_corr[["P"]])[2]]),
                        n = as.vector(temp_corr[["n"]][1,2:dim(temp_corr[["n"]])[2]])
@@ -369,48 +391,78 @@ env_corr <- rbind(env_corr,temp_corr)
 env_corr <- na.omit(env_corr)
 rm(temp_corr,temp_dep)
 write.csv(env_corr,"Environmental_correlations.csv")
-hist(env_corr$corr_values)
 
 
 
-##Environmental correlations - weekly (chl) - poor reco 
+
+
+#Environmental correlations - hourly, all duration
 #wide bivalves
-dbwide_week <- dblong_week %>% select(group,Deployment.number,Biv_num,biv_open_interval_perc) %>%
-  spread(key = Biv_num,value = biv_open_interval_perc)
+dbwide_hour <- dblong/_hour %>% select(Date_time,Deployment.number,Bivalve.number,mean.biv.gap.precent) %>%
+  spread(key = Bivalve.number,value = mean.biv.gap.precent)
 #wide environment
-environment_week_wide <- dblong_week %>% select(group,Deployment.number,Chl) %>% 
+environment_wide <- dblong_hour %>% select(Date_time,Deployment.number,Hs.m.,Tp.s.,Dp.deg.,H1.10.m.,Tmean.s.,Current.Speed.cm.sec.,Current.Direction.deg.,Temp_1hour_mean,Lux_1hour_mean,Turbidity_1hour_mean) %>% 
   distinct()
-#get all the deployments
-deployments <- unique(dbwide_week$Deployment.number)
 #prepare the big data frame
-env_corr_week <- data.frame(dep_num=integer(),
-                       biv_num=character(),
+env_corr <- data.frame(biv_num=character(),
                        environmental_factor=character(),
                        corr_values=double(),
                        p_values=double(),
                        n=integer()
 )
 
-for (dep in deployments) {
-temp_dep <- dbwide_week %>% filter(Deployment.number==dep)
-#remove bivalves weren't deployed in the specific deployment
-temp_dep <- temp_dep[,colSums(!is.na(temp_dep))>0]
-# get the bivalves names
-temp_bivalves_id <- names(temp_dep)[3:dim(temp_dep)[2]]
-#filter environmental data to a specific deployment
-temp_env <- environment_wide %>% filter(Deployment.number==dep)
-temp_env <- temp_env %>% select(-Deployment.number)
-if(length(which(!is.na(temp_env$Chl)))>3)
-{
-  for (biv_num in temp_bivalves_id) {
-    temp_biv <- temp_dep[,c(1,which(colnames(temp_dep)==biv_num ))]
-    temp_biv <- merge(temp_biv,temp_env,by="group",all.x=T)
+#get the bivalves names
+bivalves_id <- unique(dblong_hour$Bivalve.number)
+for (biv_num in bivalves_id) {
+  temp_biv <- dbwide_hour[,c(1,which(colnames(dbwide_hour)==biv_num ))]
+  temp_biv <- merge(temp_biv,environment_wide,by="Date_time",all.x=T)
+  #remove datetime
+  temp_biv <- temp_biv %>% select(-Deployment.number,-Date_time)
+  #getting correlation, p-values and n and convert them to data frame
+  temp_corr <- rcorr(as.matrix(temp_biv),type = "pearson")
+  temp_corr <-data.frame(biv_num=biv_num,
+                       #starting from 2 to avoid autocorrelation with the bivalve
+                       #getting the environmental factors names 
+                       environmental_factor=colnames(temp_corr[["r"]])[2:length(colnames(temp_corr[["r"]])
+                                                                                )],
+                       corr_values = as.vector(temp_corr[["r"]][1,2:dim(temp_corr[["r"]])[2]]),
+                       p_values = as.vector(temp_corr[["P"]][1,2:dim(temp_corr[["P"]])[2]]),
+                       n = as.vector(temp_corr[["n"]][1,2:dim(temp_corr[["n"]])[2]])
+                       )
+  env_corr <- rbind(env_corr,temp_corr)
+}
+env_corr <- na.omit(env_corr)
+rm(temp_corr)
+
+hist(env_corr$corr_values[env_corr$environmental_factor=="Turbidity_1houR" & env_corr$p_values<0.05],breaks = seq(-1,1,0.1))
+write.csv(env_corr,"Environmental_correlations_all_duration.csv")
+
+
+
+
+
+##Environmental correlations - weekly (chl) 
+#wide bivalves
+dbwide_week <- dblong_week %>% select(group,Deployment.number,Biv_num,biv_open_interval_perc) %>%
+  spread(key = Biv_num,value = biv_open_interval_perc)
+#wide environment
+environment_week_wide <- dblong_week %>% select(group,Deployment.number,Chl) %>% 
+  distinct()
+#prepare the big data frame
+env_corr_week <- data.frame(biv_num=character(),
+                       environmental_factor=character(),
+                       corr_values=double(),
+                       p_values=double(),
+                       n=integer()
+)
+for (biv_num in bivalves_id) {
+    temp_biv <- dbwide_week[,c(1,which(colnames(dbwide_hour)==biv_num ))]
+    temp_biv <- merge(temp_biv,environment_week_wide,by="group",all.x=T)
     #remove datetime
-    temp_biv <- temp_biv[-1]
+    temp_biv <- temp_biv %>% select(-Deployment.number,-group)
     #getting correlation, p-values and n and convert them to data frame
     temp_corr <- rcorr(as.matrix(temp_biv),type = "pearson")
-    temp_corr <-data.frame(dep_num = paste("Deployment",dep),
-                       biv_num=biv_num,
+    temp_corr <-data.frame(biv_num=biv_num,
                        #starting from 2 to avoid autocorrelation with the bivalve
                        #getting the environmental factors names
                        environmental_factor="Chl",
@@ -419,26 +471,58 @@ if(length(which(!is.na(temp_env$Chl)))>3)
                        n = as.vector(temp_corr[["n"]][1,2:dim(temp_corr[["n"]])[2]])
                        )
     env_corr_week <- rbind(env_corr_week,temp_corr)
-    }
-  }
 }
-env_corr_week <- na.omit(env_corr_week)
-rm(temp_corr,temp_dep)
-write.csv(env_corr_week,"Chl_correlations_week.csv")
-hist(env_corr_week$corr_values)
+rm(temp_corr)
+write.csv(env_corr_week,"Chl_correlations_week-all_duration.csv")
+
+
+env_corr_week_significant <- env_corr_week %>% filter(p_values<0.05)
+hist(env_corr_week_significant$corr_values,seq(-1,1,by=0.1))
 
 
 
+###Environmental correlations - daily for mean of all bivalves
+#get mean open percentage daily to all bivalves
+open_perc_daily <-dblong_day %>%
+  group_by(group) %>%
+  summarise(daily_mean_open_perc=mean(biv_open_interval_perc),daily_mean_biv_open_degree=mean(biv_open_interval),n_bivalves=n())
+#get mean open time ratio daily to all bivalves
+open_time_daily <- bivalves_daily_open %>% 
+  filter(limit==20) %>% 
+  group_by(date) %>%
+  summarise(daily_mean_open_time_ratio=mean(open_time_ratio))
+#make them in same format and merge
+names(open_time_daily)[1] <- "group"
+open_perc_daily$group <- as.Date(open_perc_daily$group)
+biv_mean_daily <- merge(open_perc_daily,open_time_daily,by="group")
+
+#merge the environmental data
+names(env_1day)[1] <- "group"
+biv_mean_daily <- merge(biv_mean_daily,env_1day)
+
+#remove unnecessery columns
+temp_corr <- biv_mean_daily %>% select(-group,-n_bivalves,-Date_time,-daily_mean_biv_open_degree)
+#prepare the correlation data frame and calculate it
+temp_corr <- rcorr(as.matrix(temp_corr),type = "pearson")
+env_corr_day <- data.frame(matrix(NA,nrow=8,ncol=5))
+names(env_corr_day) <- c("biv_factor","environmental_factor","corr_values","p_values","n")
+env_corr_day$biv_factor <- c(rep("open_time",4),rep("open_perc",4))
+env_corr_day$environmental_factor <- rep(c("Temp","Light","Turbidity","Hs"),2)
+env_corr_day$corr_values[1:4] <- temp_corr[["r"]][6,1:4]
+env_corr_day$p_values[1:4] <- temp_corr[["P"]][6,1:4]
+env_corr_day$n[1:4] <- temp_corr[["n"]][6,1:4]
+env_corr_day$corr_values[5:8] <- temp_corr[["r"]][5,1:4]
+env_corr_day$p_values[5:8] <- temp_corr[["P"]][5,1:4]
+env_corr_day$n[5:8] <- temp_corr[["n"]][5,1:4]
+rm(temp_corr)
+write.csv(env_corr_day,"Environmental_correlations_day_all_bivalves.csv")
 
 ```
-
-
-
-##Bivalve opening times(how much time was open in whole duration or daily)
+##Bivalve opening times(how much time was open in whole duration/daily/3h)
 ```{r}
 ###check mean and max opening time for each bivalve for the whole deployments duration
 bivalves_names<-unique(dblong2$Biv_num)
-#prepare the dataframe
+#prepare the data frame
 bivalves_opening_times<-data.frame(
   bivalve_name=character(),
   mean.opening.time=double(),
@@ -492,7 +576,7 @@ for (limit in precent_limits) {
     } 
     #maximum time open continously during 1 deployment
     bivalves_opening_times$max.opening.time[biv_num+limit_iter_num]<-max(open_events)
-    #mean time open continously during 1 deployment
+    #mean time open continuosly during 1 deployment
     bivalves_opening_times$mean.opening.time[biv_num+limit_iter_num]<-mean(open_events) 
     #amount of distinct opening events
     bivalves_opening_times$n[biv_num+limit_iter_num]<-length(open_events)
@@ -505,7 +589,13 @@ for (limit in precent_limits) {
   limit_iter_num<-limit_iter_num+12
 }
 write.csv(bivalves_opening_times,"Bivalves_open_all_duration.csv")
+opening_interval_sum<- bivalves_opening_times %>% 
+  group_by(limit)%>%
+ summarise(biv_open_interval_mean=mean(mean.opening.time),sd_opening_time=sd(mean.opening.time),n=n(),biv_total_open_perc=mean(total_time_open),sd.total_time_open=sd(total_time_open))%>%
 
+
+  
+  
 ##check mean and max opening time for each bivalve for the each day
 bivalves_daily_open <- data.frame(
   bivalve_name=character(),
@@ -527,15 +617,9 @@ for (limit in precent_limits) {
     data_in_day <- c(NA,length(dates))
     #loop for all dates
     for (date_num in 1:length(dates)) {
-      temp_date<-dplyr::filter(temp_biv,temp_biv$date==dates[date_num])
-      sum_time<-0
-      #loop for each day
-      for (row in 1:dim(temp_date)[1]) {
-        if(temp_date$biv_open_interval_perc[row]>limit ){
-          sum_time<-sum_time+2
-        } 
-      }
-      open_times[date_num]<-sum_time/(24*60)*100
+      temp_date<-temp_biv %>% filter(date==dates[date_num])
+      temp_date_open <- temp_date %>% filter(biv_open_interval_perc>limit)
+      open_times[date_num]<-dim(temp_date_open)[1]/dim(temp_date)[1]
       data_in_day[date_num] <- dim(temp_date)[1]
     }
     temp_daily_open <- data.frame(
@@ -550,9 +634,11 @@ for (limit in precent_limits) {
   limit_iter_num<-limit_iter_num+12
   write.csv(bivalves_daily_open,"Bivalves_daily_open.csv")
 }
+
+
 ```
 
-## Including Plots
+## Seasonal & Daily trend Plot
 
 ```{r}
 #seasonal and daily trend along bivalves - Work!
@@ -582,38 +668,136 @@ months_gaping_graph <- ggplot(dblong2, aes(x = TimeofDay, y = biv_open_interval_
         legend.text = element_text(size = 14))
   months_gaping_graph
   
+```
+
+##Day_night plot
+```{r}
 #Day Night difference -  Work only for 0 to 100 range!
   Day_Night_gaping_graph <- ggplot(dblong2, aes(x = diff_sunset, y = biv_open_interval_perc)) +
     geom_point(size = 0.1, alpha = 0.5, color = "gray") +
     geom_smooth(data = subset(dblong2,diff_sunset>0), size = 1.5,color = "blue", se =T,fill="yellow")+ 
     geom_smooth(data = subset(dblong2,diff_sunset<0), size = 1.5,color = "red",se =T,fill="yellow")+
     geom_vline(xintercept = 0,linetype="dashed",color="black")+
-    scale_y_continuous(limits = c(0,100
-                                  ))+
+    scale_y_continuous(limits = c(0,100))+
     scale_x_continuous(limits = c(-12,12),breaks = seq(-12,12,2))+
     labs(title = "Bivalve Open Interval Percentage Over Time",
          x = "Time",
          y = "Bivalve Open Percentage") 
 Day_Night_gaping_graph
 
-#bivalve correlation graph - not on top of each other and not beautiful!
+```
+
+##Correlations plot - bivalves and environmental
+```{r}
+
+#Bivalve correlation graph - without mean!
 correlation_hitsogram <- ggplot(bivalve_corr, aes(corr_values)) +
-  geom_histogram(binwidth = 0.1,breaks = seq(-1, 1, by = 0.1), fill = "lightblue", color = "black") +
-  scale_x_continuous(limits = c(-1,1))+
-  labs(title = "Distribution of corr_values with Box Plot",
-       x = "Correlation values",
-       y = "Count") 
-
-correlation_boxplot <- ggplot(bivalve_corr, aes(corr_values))+geom_boxplot(aes(y=corr_values,x=NULL))+
-  geom_hline(yintercept = 0, linetype = "dashed", color = "red", size = 1) +coord_flip()
-
-layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(1,8))
+                           geom_histogram(binwidth = 0.1,breaks = seq(-1, 1, by = 0.1), 
+                                          fill = "antiquewhite1", color = "black") +
+                           scale_x_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
+                                            0.2),minor_breaks = seq(-1, 1, by = 0.1))+
+                           labs(x = "Correlation values",y = "Count")+
+                           geom_vline(xintercept = 0, linetype = "dashed", color = "red", 
+                                      size = 1)+
+                           theme_bw()+
+                           theme(title=element_blank(),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.background = element_blank(),
+                           panel.border = element_blank(),
+                           axis.line.y = element_line(colour = "black"),
+                           axis.line.x = element_line(colour = "black"))
+                           
  
-# Draw the boxplot and the histogram 
-par(mar=c(0, 3.1, 1.1, 2.1))
-boxplot(bivalve_corr$corr_values , horizontal=TRUE , ylim=c(-1,1), xaxt="n" , col=rgb(0.8,0.8,0,0.5) , frame=F)
-par(mar=c(4, 3.1, 1.1, 2.1))
-hist(bivalve_corr$corr_values , breaks=20 , col=rgb(0.2,0.8,0.5,0.5) , border=F , main="" , xlab="Bivalves correlations", xlim=c(-1,1),ylim = c(0,30))
+correlation_boxplot <- ggplot(bivalve_corr, mapping =  
+                       aes(corr_values))+geom_boxplot(aes(y=corr_values,x=NULL),fill = 
+                                                        "antiquewhite1", color = "black")+
+                       scale_y_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
+                                          0.2),minor_breaks = seq(-1, 1, by = 0.1) )+
+                       geom_hline(yintercept = 0, linetype = "dashed", color = "red", 
+                                      size = 1)+
+                       coord_flip()+
+                       theme_bw()+
+                       theme_void()+
+                       theme(panel.grid.major = element_blank(),
+                       panel.grid.minor = element_blank(),
+                       panel.background = element_blank(),
+                       axis.ticks.y = element_blank(),
+                       axis.title.y = element_blank(),
+                       axis.text.y = element_blank())
+biv_corr_plot <- correlation_boxplot/correlation_hitsogram+
+             plot_layout(heights = c(0.2,4))+
+             plot_annotation(title = 'Bivalves Correlations')
 
+
+#Environmental correlation graph - Without mean!
+env_corr_plot_data <- env_corr %>% filter(environmental_factor %in% c("Hs.m.","Temp_1hour_mean","Lux_1hour_mean","Turbidity_1hour_mean"))
+env_factors <- unique(env_corr_plot_data$environmental_factor)
+env_colors <- c("cornflowerblue","coral2","gold","chocolate4")
+env_corr_plots <- list()
+for (factor_num in 1:length(env_factors)) {
+  temp_env_factor <- env_corr_plot_data %>% 
+    filter(environmental_factor == env_factors[factor_num])
+  env_correlation_hitsogram <- ggplot(temp_env_factor, aes(corr_values)) +
+                           geom_histogram(binwidth = 0.1,breaks = seq(-1, 1, by = 0.1), 
+                                          fill = env_colors[factor_num], color = "black") +
+                           scale_x_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
+                                            0.2),minor_breaks = seq(-1, 1, by = 0.1))+
+                           labs(x = "Correlation values",y = "Count")+
+                           geom_vline(xintercept = 0, linetype = "dashed", color = "red", 
+                                      size = 1)+
+                           theme_bw()+
+                           theme(title=element_blank(),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.background = element_blank(),
+                           panel.border = element_blank(),
+                           axis.line.y = element_line(colour = "black"),
+                           axis.line.x = element_line(colour = "black"))
+                           
+ 
+  env_correlation_boxplot <- ggplot(temp_env_factor, mapping =  
+                       aes(corr_values))+geom_boxplot(aes(y=corr_values,x=NULL),fill = 
+                                                        env_colors[factor_num], color =
+                                                        "black")+
+                       scale_y_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
+                                          0.2),minor_breaks = seq(-1, 1, by = 0.1) )+
+                       geom_hline(yintercept = 0, linetype = "dashed", color = "red", 
+                                      size = 1)+
+                       coord_flip()+
+                       theme_bw()+
+                       theme_void()+
+                       theme(panel.grid.major = element_blank(),
+                       panel.grid.minor = element_blank(),
+                       panel.background = element_blank(),
+                       axis.ticks.y = element_blank(),
+                       axis.title.y = element_blank(),
+                       axis.text.y = element_blank())
+  
+  env_corr_plots[[factor_num]] <- env_correlation_boxplot/env_correlation_hitsogram+
+             plot_layout(heights = c(0.2,4))+
+             plot_annotation(title = paste(env_factors[factor_num],"correlations"))
+
+}
+
+##All corr plot combined together
+corr_plot <- ggarrange(biv_corr_plot,env_corr_plots[[1]],env_corr_plots[[2]],env_corr_plots[[3]],env_corr_plots[[4]],nrow = 5)
+```
+
+
+##Opening times violin plot
+```{r}
+bivalves_opening_times$limit <- as.factor(bivalves_opening_times$limit )
+opening_violin_plot <- ggplot(bivalves_opening_times,aes(x=limit,y=mean.opening.time)
+                              )+
+                       geom_violin(aes(fill=limit))+
+                       geom_boxplot(width=0.1, color="black",fill="white") +
+                       labs(x = "Close definition percentage [%]", y = "Mean opening interval [min]")+
+                       scale_y_continuous(breaks = seq(0,120,by=10))+
+                       theme_bw()+
+                       theme(panel.grid.major = element_blank(),
+                       panel.grid.minor = element_blank(),
+                       panel.background = element_blank(),
+                       legend.position="none")
 ```
 
