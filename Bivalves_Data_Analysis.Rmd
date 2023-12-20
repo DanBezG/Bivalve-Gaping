@@ -42,7 +42,7 @@ Convert_time_csv <- function(data, final_format, initial_format="ymd HMS",correc
 }
 
 # This functions gets a bivalve df and returns it after calculate the different metrics for a given time interval
-df_cut_times <- function(biv_df,date_col_num,break_interval,date_format) {
+biv_df_cut_times <- function(biv_df,date_col_num,break_interval,date_format) {
   biv_df[,date_col_num] <- parse_date_time(biv_df[,date_col_num],orders = date_format)
   biv_df$group <- cut(biv_df[,date_col_num], breaks= break_interval)
   biv_df_cut_time <-biv_df %>%
@@ -110,11 +110,11 @@ write.csv(dblong,"Big_Hobo_databse_long_raw_percent.csv")
 ##Average by different time intervals
 
 ```{r}
-dblong2 <- df_cut_times(dblong,1,"2 min","ymd HMS")
-dblong10 <- df_cut_times(dblong,1,"10 min","ymd HMS")
-dblong_hour <- df_cut_times(dblong,1,"1 hour","ymd HMS")
-dblong_day <- df_cut_times(dblong,1,"1 day","ymd HMS")
-dblong_week <- df_cut_times(dblong,1,"1 week","ymd HMS")
+dblong2 <- biv_df_cut_times(dblong,1,"2 min","ymd HMS")
+dblong10 <- biv_df_cut_times(dblong,1,"10 min","ymd HMS")
+dblong_hour <- biv_df_cut_times(dblong,1,"1 hour","ymd HMS")
+dblong_day <- biv_df_cut_times(dblong,1,"1 day","ymd HMS")
+dblong_week <- biv_df_cut_times(dblong,1,"1 week","ymd HMS")
 write.csv(dblong2, "Big_Hobo_databse_long_2min_percent.csv")
 write.csv(dblong10, "Big_Hobo_databse_long_10min_percent.csv")
 write.csv(dblong_hour, "Big_Hobo_databse_long_hour_percent.csv")
@@ -153,14 +153,14 @@ waves<-readRDS("Waves_data.RDS")
 currents<-readRDS("Currents_data.RDS")
 # waves
 names(waves)[1]<-"group"
-waves$group <- Convert_time_csv(waves$group,final_format = "%Y-%m-%d %H:%M:%S",initial_format = "dmy HM",correct_time = F)
+waves$group <- Convert_time_csv(waves$group,final_format = "%Y-%m-%d %H:%M:%S",initial_format = "dmy HMS",correct_time = F)
 dblong_hour<-merge(dblong_hour,waves,by="group",all.x = T)
 rm(waves)
 
 #currents
 #get only bottom currents
 currents<-currents %>% filter(Depth..m.==23)
-currents<-currents[,-2]
+currents<-currents %>% select(-Depth..m.)
 names(currents)[1]<-"group"
 currents$group <- Convert_time_csv(currents$group,"%Y-%m-%d %H:%M:%S","dmy HM",correct_time = F)
 dblong_hour<-merge(dblong_hour,currents,by="group",all.x = T)
@@ -169,7 +169,6 @@ rm(currents)
 #change NA to none
 names(dblong_hour)<-c("Date_time","Deployment.number","Bivalve.number","mean.biv.gap.precent","mean.biv.open.degree","percentile.99","Hs[m]","Tp[s]","Dp[deg]","H1/10[m]","Tmean[s]","Current.Speed[cm/sec]","Current.Direction[deg]")
 dblong_hour<-arrange(dblong_hour,Deployment.number,Bivalve.number,Date_time)
-dblong_hour <- replace(dblong_hour, is.na(dblong_hour), "")
 
 #getting only environmental data and remove duplicates
 env_10min_to_1hour <- dblong10 %>% 
@@ -182,7 +181,7 @@ env_10min_to_1hour$lux <- as.numeric(env_10min_to_1hour$lux)
 env_10min_to_1hour$Turbidity <- as.numeric(env_10min_to_1hour$Turbidity)
 env_10min_to_1hour <-env_10min_to_1hour %>%
   group_by(Date_time) %>%
-  summarise(Temp_1hour_mean=mean(Temp),Lux_1hour_mean=mean(lux),Turbidity_1hour_mean=mean(Turbidity))
+  summarise(Temp_1hour_mean=mean(Temp,na.rm=T),Lux_1hour_mean=mean(lux,na.rm=T),Turbidity_1hour_mean=mean(Turbidity,na.rm=T))
 dblong_hour<-merge(dblong_hour,env_10min_to_1hour,by="Date_time",all.x = T)
 rm(env_10min_to_1hour)
 write.csv(dblong_hour, "Big_Hobo_databse_long_hour_percent&env.csv")
@@ -200,20 +199,21 @@ env_1day$lux <- as.numeric(env_1day$lux)
 env_1day$Turbidity <- as.numeric(env_1day$Turbidity)
 env_1day <-env_1day %>%
   group_by(Date_time) %>%
-  summarise(Temp_1hour_mean=mean(Temp),Lux_1hour_mean=mean(lux),Turbidity_1hour_mean=mean(Turbidity))
+  summarise(Temp_1day_mean=mean(Temp,na.rm=T),Lux_1day_mean=mean(lux,na.rm=T),Turbidity_1day_mean=mean(Turbidity,na.rm=T))
 temp_env_1hour <- dblong_hour %>% 
-  select(Date_time,Hs.m.) %>% 
+  select(Date_time,`Hs[m]`) %>% 
   distinct()
 temp_env_1hour$Date_time <- parse_date_time(temp_env_1hour$Date_time,orders = "ymd HMS")
 temp_env_1hour$Date_time <- cut(temp_env_1hour$Date_time, breaks= "1 day")
+temp_env_1hour$`Hs[m]` <- as.numeric(temp_env_1hour$`Hs[m]`)
 temp_env_1hour <-temp_env_1hour %>%
   group_by(Date_time) %>%
-  summarise(Hs_1hour_mean=mean(Hs.m.))
+  summarise(Hs_1day_mean=mean(`Hs[m]`,na.rm=T))
 env_1day <- merge(env_1day,temp_env_1hour,by="Date_time")
 rm(temp_env_1hour)
 ```
 
-## Env_1week - reco
+##Env_1week - reco
 ```{r}
 reco<-read.csv("RECO_Database - Data.csv")
 reco$mm.dd.yyyy<-parse_date_time(reco$mm.dd.yyyy,orders = "mdy",truncated = 3)
@@ -223,10 +223,9 @@ reco$group <- cut(reco$mm.dd.yyyy, breaks="week")
 reco <- reco %>%filter(Station=="ST3") %>%
   select(group,Cal.Chl...ug.L.,Depth..m.) %>% 
   group_by(group)
-reco <- na.omit(reco) 
 #summarise to all depths
 reco <- reco %>% 
-  summarise(Chl=mean(Cal.Chl...ug.L.)) %>% 
+  summarise(Chl=mean(Cal.Chl...ug.L.,na.rm=T)) %>% 
   arrange(group)
 #make sure the group columns are the same
 reco$group <- as.POSIXct(reco$group,format = "%Y-%m-%d")
@@ -346,7 +345,7 @@ hist(biv_corr_hour$corr_values[biv_corr_hour$p_values<0.05],breaks = seq(-1,1,0.
 dbwide_hour <- dblong_hour %>% select(Date_time,Deployment.number,Bivalve.number,mean.biv.gap.precent) %>%
   spread(key = Bivalve.number,value = mean.biv.gap.precent)
 #wide environment
-environment_wide <- dblong_hour %>% select(Date_time,Deployment.number,Hs.m.,Tp.s.,Dp.deg.,H1.10.m.,Tmean.s.,Current.Speed.cm.sec.,Current.Direction.deg.,Temp_1hour_mean,Lux_1hour_mean,Turbidity_1hour_mean) %>% 
+environment_wide <- dblong_hour %>% select(Date_time,Deployment.number,`Hs[m]`,`Tp[s]`,`Dp[deg]`,`H1/10[m]`,`Tmean[s]`,`Current.Speed[cm/sec]`,`Current.Direction[deg]`,Temp_1hour_mean,Lux_1hour_mean,Turbidity_1hour_mean) %>% 
   distinct()
 #get all the deployments
 deployments <- unique(dbwide_hour$Deployment.number)
@@ -372,7 +371,7 @@ for (biv_num in temp_bivalves_id) {
   temp_biv <- temp_dep[,c(1,which(colnames(temp_dep)==biv_num ))]
   temp_biv <- merge(temp_biv,temp_env,by="Date_time",all.x=T)
   #remove datetime
-  temp_biv <- temp_biv[-1]
+  temp_biv <- temp_biv %>% select(-Date_time)
   #getting correlation, p-values and n and convert them to data frame
   temp_corr <- rcorr(as.matrix(temp_biv),type = "pearson")
   temp_corr <-data.frame(dep_num = paste("Deployment",dep),
@@ -388,20 +387,19 @@ for (biv_num in temp_bivalves_id) {
 env_corr <- rbind(env_corr,temp_corr)
   }
 }
-env_corr <- na.omit(env_corr)
-rm(temp_corr,temp_dep)
-write.csv(env_corr,"Environmental_correlations.csv")
-
+rm(temp_corr,temp_dep,temp_env,temp_biv)
+write.csv(env_corr,"Environmental_correlations_hour_by_Deployment")
+hist(env_corr$corr_values[env_corr$environmental_factor=="Temp_1hour_mean" & env_corr$p_values<0.05],breaks = seq(-1,1,0.1))
 
 
 
 
 #Environmental correlations - hourly, all duration
 #wide bivalves
-dbwide_hour <- dblong/_hour %>% select(Date_time,Deployment.number,Bivalve.number,mean.biv.gap.precent) %>%
+dbwide_hour <- dblong_hour %>% select(Date_time,Deployment.number,Bivalve.number,mean.biv.gap.precent) %>%
   spread(key = Bivalve.number,value = mean.biv.gap.precent)
 #wide environment
-environment_wide <- dblong_hour %>% select(Date_time,Deployment.number,Hs.m.,Tp.s.,Dp.deg.,H1.10.m.,Tmean.s.,Current.Speed.cm.sec.,Current.Direction.deg.,Temp_1hour_mean,Lux_1hour_mean,Turbidity_1hour_mean) %>% 
+environment_wide <- dblong_hour %>% select(Date_time,Deployment.number,`Hs[m]`,`Tp[s]`,`Dp[deg]`,`H1/10[m]`,`Tmean[s]`,`Current.Speed[cm/sec]`,`Current.Direction[deg]`,Temp_1hour_mean,Lux_1hour_mean,Turbidity_1hour_mean) %>% 
   distinct()
 #prepare the big data frame
 env_corr <- data.frame(biv_num=character(),
@@ -431,11 +429,9 @@ for (biv_num in bivalves_id) {
                        )
   env_corr <- rbind(env_corr,temp_corr)
 }
-env_corr <- na.omit(env_corr)
-rm(temp_corr)
-
-hist(env_corr$corr_values[env_corr$environmental_factor=="Turbidity_1houR" & env_corr$p_values<0.05],breaks = seq(-1,1,0.1))
-write.csv(env_corr,"Environmental_correlations_all_duration.csv")
+rm(temp_corr,temp_biv)
+hist(env_corr$corr_values[env_corr$environmental_factor=="Temp_1hour_mean" & env_corr$p_values<0.05],breaks = seq(-1,1,0.1))
+write.csv(env_corr,"Environmental_correlations_hour_all_duration.csv")
 
 
 
@@ -445,21 +441,18 @@ write.csv(env_corr,"Environmental_correlations_all_duration.csv")
 #wide bivalves
 dbwide_week <- dblong_week %>% select(group,Deployment.number,Biv_num,biv_open_interval_perc) %>%
   spread(key = Biv_num,value = biv_open_interval_perc)
-#wide environment
-environment_week_wide <- dblong_week %>% select(group,Deployment.number,Chl) %>% 
-  distinct()
 #prepare the big data frame
 env_corr_week <- data.frame(biv_num=character(),
                        environmental_factor=character(),
                        corr_values=double(),
-                       p_values=double(),
+                       p_values = double(),
+                       alues=double(),
                        n=integer()
 )
 for (biv_num in bivalves_id) {
     temp_biv <- dbwide_week[,c(1,which(colnames(dbwide_hour)==biv_num ))]
-    temp_biv <- merge(temp_biv,environment_week_wide,by="group",all.x=T)
-    #remove datetime
-    temp_biv <- temp_biv %>% select(-Deployment.number,-group)
+    temp_biv <- merge(temp_biv,reco,by="group",all.x=T)
+    temp_biv <- temp_biv %>% select(-group)
     #getting correlation, p-values and n and convert them to data frame
     temp_corr <- rcorr(as.matrix(temp_biv),type = "pearson")
     temp_corr <-data.frame(biv_num=biv_num,
@@ -474,10 +467,8 @@ for (biv_num in bivalves_id) {
 }
 rm(temp_corr)
 write.csv(env_corr_week,"Chl_correlations_week-all_duration.csv")
-
-
 env_corr_week_significant <- env_corr_week %>% filter(p_values<0.05)
-hist(env_corr_week_significant$corr_values,seq(-1,1,by=0.1))
+hist(env_corr_week$corr_values,seq(-1,1,by=0.1))
 
 
 
@@ -498,22 +489,23 @@ biv_mean_daily <- merge(open_perc_daily,open_time_daily,by="group")
 
 #merge the environmental data
 names(env_1day)[1] <- "group"
+env_1day$group <- as.Date(env_1day$group)
 biv_mean_daily <- merge(biv_mean_daily,env_1day)
 
 #remove unnecessery columns
-temp_corr <- biv_mean_daily %>% select(-group,-n_bivalves,-Date_time,-daily_mean_biv_open_degree)
+temp_corr <- biv_mean_daily %>% select(-group,-n_bivalves,-daily_mean_biv_open_degree)
 #prepare the correlation data frame and calculate it
 temp_corr <- rcorr(as.matrix(temp_corr),type = "pearson")
 env_corr_day <- data.frame(matrix(NA,nrow=8,ncol=5))
 names(env_corr_day) <- c("biv_factor","environmental_factor","corr_values","p_values","n")
 env_corr_day$biv_factor <- c(rep("open_time",4),rep("open_perc",4))
 env_corr_day$environmental_factor <- rep(c("Temp","Light","Turbidity","Hs"),2)
-env_corr_day$corr_values[1:4] <- temp_corr[["r"]][6,1:4]
-env_corr_day$p_values[1:4] <- temp_corr[["P"]][6,1:4]
-env_corr_day$n[1:4] <- temp_corr[["n"]][6,1:4]
-env_corr_day$corr_values[5:8] <- temp_corr[["r"]][5,1:4]
-env_corr_day$p_values[5:8] <- temp_corr[["P"]][5,1:4]
-env_corr_day$n[5:8] <- temp_corr[["n"]][5,1:4]
+env_corr_day$corr_values[1:4] <- temp_corr[["r"]][2,3:6]
+env_corr_day$p_values[1:4] <- temp_corr[["P"]][2,3:6]
+env_corr_day$n[1:4] <- temp_corr[["n"]][2,3:6]
+env_corr_day$corr_values[5:8] <- temp_corr[["r"]][1,3:6]
+env_corr_day$p_values[5:8] <- temp_corr[["P"]][1,3:6]
+env_corr_day$n[5:8] <- temp_corr[["n"]][1,3:6]
 rm(temp_corr)
 write.csv(env_corr_day,"Environmental_correlations_day_all_bivalves.csv")
 
@@ -632,7 +624,7 @@ for (limit in precent_limits) {
     bivalves_daily_open <- rbind(bivalves_daily_open,temp_daily_open)
   }
   limit_iter_num<-limit_iter_num+12
-  write.csv(bivalves_daily_open,"Bivalves_daily_open.csv")
+  write.csv(bivalves_daily_open,"Bivalves_daily_open_time_ratio.csv")
 }
 
 
