@@ -50,6 +50,21 @@ biv_df_cut_times <- function(biv_df,date_col_num,break_interval,date_format) {
   summarise(biv_open_interval_perc=mean(biv_open_percent),biv_open_interval=mean(biv_open),per99.9=mean(percentile.99))
   return(biv_df_cut_time)
 }
+
+GetSeason <- function(date) {
+  Spring_start_day <- 60
+  Summer_start_day <- 152
+  Fall_start_day <- 244
+  Winter_start_day <- 335
+  season_vecotr <- vector(mode = "character",length = length(date)) 
+  for (dat in 1:length(date)) {
+  season_vecotr[dat] <- ifelse (date[dat] >= Spring_start_day & date[dat] < Summer_start_day, "Spring",
+      ifelse (date[dat] >= Summer_start_day & date[dat] < Fall_start_day, "Summer",
+        ifelse (date[dat] >= Fall_start_day & date[dat] < Winter_start_day, "Fall", "Winter")))
+  
+  }
+  return(season_vecotr)
+}
 ```
 
 ##packages
@@ -64,6 +79,7 @@ library(scales)
 library(Hmisc) # for function rcorr
 library(StreamMetabolism) #for getting sunrise and sunset
 library(patchwork)
+library(ggpubr)
 
 ```
 
@@ -628,6 +644,48 @@ for (limit in precent_limits) {
 }
 
 
+
+##check mean and max opening time for in 3 hours bins
+dblong_3h_bin <- dblong2 %>% select(-Sunset,-Sunrise)
+dblong_3h_bin$Day_bin <- cut(dblong_3h_bin$group, breaks= "1 day")
+#chose 20 just to see if works
+close_limit <- 20
+dblong_3h_bin$DayofYear <- yday(dblong_3h_bin$group)
+dblong_3h_bin$Season <- GetSeason(dblong_3h_bin$DayofYear)
+dblong_3h_bin$open_close <- ifelse(dblong_3h_bin$biv_open_interval_perc>close_limit,"Open","Close")
+bivalves_3h_open_time_ratio <- data.frame(
+  bivalve_name=character(),
+  date=Date(),
+  hour=character(),
+  open_time_ratio=double(),
+  n=integer(),
+  Season=character()
+)
+for (biv in bivalves_names) {
+  temp_biv <- dblong_3h_bin %>% filter(Biv_num==biv)
+  temp_dates_list <-unique(temp_biv$Day_bin)
+  for (date in temp_dates_list) {
+    temp_date <- temp_biv %>% filter(Day_bin==date)
+    temp_date$ThreeHour_bin <-  cut(temp_date$group, breaks= "3 hours")
+    temp_date <- temp_date %>% group_by(ThreeHour_bin) %>%
+      summarise(Open_time_ratio=sum(open_close=="Open")/n(),n=n(),season=unique(Season)) 
+    temp_date <- data.frame(
+                 bivalve_name=biv,
+                 date=date,
+                 hour=format(ymd_hms(temp_date$ThreeHour_bin),"%H:%M"),
+                 open_time_ratio=temp_date$Open_time_ratio,
+                 n=temp_date$n,
+                 Season=temp_date$season)
+    bivalves_3h_open_time_ratio <- rbind(bivalves_3h_open_time_ratio,temp_date)
+  }
+}
+rm(temp_date,temp_biv)
+write.csv(bivalves_3h_open_time_ratio,"Bivalves_3h_open_time_ratio.csv")
+sum_bivalves_3h_open_time_ratio <- bivalves_3h_open_time_ratio %>% 
+  group_by(hour,Season) %>% 
+  summarise_at(vars(open_time_ratio), funs(mean, median, sd, n())) %>% 
+  mutate(conf_int = sd/sqrt(n) * qt(p = 0.975, df = n-1))
+write.csv(sum_bivalves_3h_open_time_ratio,"Bivalves_3h_open_time_ratio_sum.csv")
 ```
 
 ## Seasonal & Daily trend Plot
@@ -640,7 +698,6 @@ dblong2$TimeofDay <- as.POSIXct(hms::as_hms(dblong2$group))
 months_gaping_graph <- ggplot(dblong2, aes(x = TimeofDay, y = biv_open_interval_perc))+
   geom_point(color = "grey", size = 0.1)+
   geom_smooth(linewidth = 2, color = "blue",se = T,fill="red")+
-  # geom_spline(spar = 0.05, linewidth = 2, color = "blue")+
   scale_x_datetime( date_breaks = "4 hours",date_labels = "%H:%M") +
   scale_y_continuous(limits = c(0,100))+
   facet_wrap(~Month, scales = "free_x", ncol = length(unique(dblong2$Month))) +
