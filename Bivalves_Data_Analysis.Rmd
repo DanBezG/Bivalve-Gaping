@@ -47,7 +47,7 @@ biv_df_cut_times <- function(biv_df,date_col_num,break_interval,date_format) {
   biv_df$group <- cut(biv_df[,date_col_num], breaks= break_interval)
   biv_df_cut_time <-biv_df %>%
   group_by(Deployment.number,Biv_num,group) %>%
-  summarise(biv_open_interval_perc=mean(biv_open_percent),biv_open_interval=mean(biv_open),per99.9=mean(percentile.99))
+  summarise(biv_open_interval_perc=mean(biv_open_percent),biv_open_interval=mean(biv_open),per99.9=mean(percentile.99),biv_open_perc_logit=mean(logit_transformation))
   return(biv_df_cut_time)
 }
 
@@ -64,6 +64,14 @@ GetSeason <- function(date) {
   
   }
   return(season_vecotr)
+}
+
+logit <- function(percentage) {
+    percentage <- ifelse(percentage==100,percentage-0.1,ifelse(percentage==0,percentage+0.1,percentage))
+    prob <- percentage/100
+    odd_precent <- (prob)/(1-prob)
+    logit <- log(odd_precent)
+    return(logit)
 }
 ```
 
@@ -119,7 +127,9 @@ for (dep_num in 1:max_deploy) {
   }
 }
 rm(temp_array_bivnum,temp_array_deploy)
-dblong$biv_open_percent<-dblong$biv_open/dblong$percentile.99*100
+dblong$biv_open_percent <- dblong$biv_open/dblong$percentile.99*100
+dblong$biv_open_percent <- ifelse(dblong$biv_open_percent>100,100,dblong$biv_open_percent)
+dblong$logit_transformation <- logit(dblong$biv_open_percent)
 write.csv(dblong,"Big_Hobo_databse_long_raw_percent.csv")
 ```
 
@@ -134,11 +144,12 @@ dblong_week <- biv_df_cut_times(dblong,1,"1 week","ymd HMS")
 write.csv(dblong2, "Big_Hobo_databse_long_2min_percent.csv")
 write.csv(dblong10, "Big_Hobo_databse_long_10min_percent.csv")
 write.csv(dblong_hour, "Big_Hobo_databse_long_hour_percent.csv")
+write.csv(dblong_week, "Big_Hobo_databse_long_day_percent.csv")
 write.csv(dblong_week, "Big_Hobo_databse_long_week_percent.csv")
 
 ```
 
-## Env_10min
+##Env_10min
 
 ```{r}
 mx<-readRDS("BigMx.RDS")
@@ -149,6 +160,7 @@ mx$group <- Convert_time_csv(mx$group,"%Y-%m-%d %H:%M:%S")
 write.xlsx(mx,"BigMx.xlsx")
 #merge to the bigHoboDatabase
 dblong10<-merge(dblong10,mx,by="group",all.x = T)
+rm(mx)
 
 #obs
 names(obs)<-c("group","Turbidity")
@@ -156,6 +168,7 @@ obs$group <- Convert_time_csv(obs$group,"%Y-%m-%d %H:%M:%S")
 write.xlsx(obs,"BigOBS.xlsx")
 #merge to the bigHoboDatabase
 dblong10<-merge(dblong10,obs,by="group",all.x = T)
+rm(obs)
 
 #change NA to none
 dblong10<-arrange(dblong10,Deployment.number,Biv_num,group)
@@ -163,7 +176,7 @@ dblong10 <- replace(dblong10, is.na(dblong10), "")
 write.csv(dblong10, "Big_Hobo_databse_long_10min_percent&env.csv")
 ```
 
-## Env_1hour and add obs and mx 1 hour average
+##Env_1hour and add obs and mx 1 hour average
 ```{r}
 waves<-readRDS("Waves_data.RDS")
 currents<-readRDS("Currents_data.RDS")
@@ -182,8 +195,7 @@ currents$group <- Convert_time_csv(currents$group,"%Y-%m-%d %H:%M:%S","dmy HM",c
 dblong_hour<-merge(dblong_hour,currents,by="group",all.x = T)
 rm(currents)
 
-#change NA to none
-names(dblong_hour)<-c("Date_time","Deployment.number","Bivalve.number","mean.biv.gap.precent","mean.biv.open.degree","percentile.99","Hs[m]","Tp[s]","Dp[deg]","H1/10[m]","Tmean[s]","Current.Speed[cm/sec]","Current.Direction[deg]")
+names(dblong_hour)<-c("Date_time","Deployment.number","Bivalve.number","mean.biv.gap.precent","mean.biv.open.degree","percentile.99","logit_transformation","Hs[m]","Tp[s]","Dp[deg]","H1/10[m]","Tmean[s]","Current.Speed[cm/sec]","Current.Direction[deg]")
 dblong_hour<-arrange(dblong_hour,Deployment.number,Bivalve.number,Date_time)
 
 #getting only environmental data and remove duplicates
@@ -216,17 +228,19 @@ env_1day$Turbidity <- as.numeric(env_1day$Turbidity)
 env_1day <-env_1day %>%
   group_by(Date_time) %>%
   summarise(Temp_1day_mean=mean(Temp,na.rm=T),Lux_1day_mean=mean(lux,na.rm=T),Turbidity_1day_mean=mean(Turbidity,na.rm=T))
-temp_env_1hour <- dblong_hour %>% 
-  select(Date_time,`Hs[m]`) %>% 
+env_1hour_to_day <- dblong_hour %>% 
+  select(Date_time,`Hs[m]`,`Current.Speed[cm/sec]`) %>% 
   distinct()
-temp_env_1hour$Date_time <- parse_date_time(temp_env_1hour$Date_time,orders = "ymd HMS")
-temp_env_1hour$Date_time <- cut(temp_env_1hour$Date_time, breaks= "1 day")
-temp_env_1hour$`Hs[m]` <- as.numeric(temp_env_1hour$`Hs[m]`)
-temp_env_1hour <-temp_env_1hour %>%
+env_1hour_to_day$Date_time <- parse_date_time(env_1hour_to_day$Date_time,orders = "ymd HMS")
+env_1hour_to_day$Date_time <- cut(env_1hour_to_day$Date_time, breaks= "1 day")
+env_1hour_to_day$`Hs[m]` <- as.numeric(env_1hour_to_day$`Hs[m]`)
+env_1hour_to_day$`Current.Speed[cm/sec]` <- as.numeric(env_1hour_to_day$`Current.Speed[cm/sec]`)
+env_1hour_to_day$`Hs[m]` <- as.numeric(env_1hour_to_day$`Hs[m]`)
+env_1hour_to_day <-env_1hour_to_day %>%
   group_by(Date_time) %>%
   summarise(Hs_1day_mean=mean(`Hs[m]`,na.rm=T))
-env_1day <- merge(env_1day,temp_env_1hour,by="Date_time")
-rm(temp_env_1hour)
+env_1day <- merge(env_1day,env_1hour_to_day,by="Date_time")
+rm(env_1hour_to_day)
 ```
 
 ##Env_1week - reco
@@ -237,11 +251,11 @@ reco$mm.dd.yyyy<-parse_date_time(reco$mm.dd.yyyy,orders = "mdy",truncated = 3)
 reco$group <- cut(reco$mm.dd.yyyy, breaks="week")
 #filter to only shallow station 
 reco <- reco %>%filter(Station=="ST3") %>%
-  select(group,Cal.Chl...ug.L.,Depth..m.) %>% 
+  select(group,Ex..Chl...ug.L..new,Depth..m.) %>% 
   group_by(group)
 #summarise to all depths
 reco <- reco %>% 
-  summarise(Chl=mean(Cal.Chl...ug.L.,na.rm=T)) %>% 
+  summarise(Chl=mean(Ex..Chl...ug.L..new,na.rm=T)) %>% 
   arrange(group)
 #make sure the group columns are the same
 reco$group <- as.POSIXct(reco$group,format = "%Y-%m-%d")
@@ -278,7 +292,7 @@ temp_date$Sunrise <- force_tz(temp_date$Sunrise,tzone = "UTC")
 temp_date$Sunset <- force_tz(temp_date$Sunset,tzone = "UTC") 
 
 dblong2<-merge(dblong2,temp_date,by="Date",all.x = T)
-dblong2$Date <- NULL
+dblong2 <- dblong2 %>% select(-Date)
 rm(temp_date)
 
 
@@ -309,7 +323,7 @@ for (row_num in 1:dim(temp_night)[1]) {
 #merging all the  data frames together
 temp_night <- temp_night %>% select(group,diff_sunset)
 #merging two partly full columns into one
-temp_sun <- temp_sun %>% left_join(y,by="group") %>%
+temp_sun <- temp_sun %>% left_join(temp_night,by="group") %>%
   mutate(diff_sunset = ifelse(is.na(diff_sunset.x),diff_sunset.y,diff_sunset.x)) %>% 
   select(-diff_sunset.x,-diff_sunset.y)
 temp_sun <- temp_sun %>% select(group,diff_sunset) %>% arrange(group)
@@ -323,9 +337,9 @@ saveRDS(dblong2,"Big_Hobo_database_long_2min_percent&sun.RDS")
 ##Bivalves correlations - per deployment
 ```{r}
 #Bivalves correlations - correlation between each bivalve pair in a singe deployment
-dbwide2 <- dblong2 %>% select(group,Deployment.number,Biv_num,biv_open_interval_perc) %>% 
-  spread(key = Biv_num,value = biv_open_interval_perc)
-write.csv(dbwide2,"Big_Hobo_database_wide_2min_percent.csv")
+dbwide2 <- dblong2 %>% select(group,Deployment.number,Biv_num,biv_open_perc_logit) %>% 
+  spread(key = Biv_num,value = biv_open_perc_logit)
+write.csv(dbwide2,"Big_Hobo_database_wide_2min_logit.csv")
 deployments <- unique(dbwide2$Deployment.number)
 bivalve_corr <- data.frame(dep_num=integer(),
                            corr_values=double(),
@@ -339,7 +353,7 @@ temp_dep <- temp_dep[,colSums(!is.na(temp_dep))>0]
 # remove datetime and deployment number
 temp_dep <- temp_dep[-1:-2]
 #getting correlation, p-values and n and convert them to data frame
-temp_corr <- rcorr(as.matrix(temp_dep),type = "pearson")
+temp_corr <- rcorr(as.matrix(temp_dep),type = "spearman")
 temp_corr <-data.frame(dep_num = paste("Deployment",dep),
                        corr_values = as.vector(temp_corr[["r"]][upper.tri(temp_corr[["r"]])]),
                        p_values = as.vector(temp_corr[["P"]][upper.tri(temp_corr[["P"]])]),
@@ -348,72 +362,18 @@ temp_corr <-data.frame(dep_num = paste("Deployment",dep),
 bivalve_corr <- rbind(bivalve_corr,temp_corr)                       
 }
 rm(temp_corr,temp_dep)
-write.csv(bivalve_corr,"Bivalves_correlations.csv")
-hist(biv_corr_hour$corr_values[biv_corr_hour$p_values<0.05],breaks = seq(-1,1,0.1))
+write.csv(bivalve_corr,"Bivalves_correlations_spearman.csv")
+hist(biv_corr_day$corr_values,breaks = seq(-1,1,0.1))
 ```
 
 
 
 ##Environmental correlations - per deployment/whole duration/daily_all_bivalves
 ```{r}
-#Environmental correlations - hourly include deployments
-#wide bivalves
-dbwide_hour <- dblong_hour %>% select(Date_time,Deployment.number,Bivalve.number,mean.biv.gap.precent) %>%
-  spread(key = Bivalve.number,value = mean.biv.gap.precent)
-#wide environment
-environment_wide <- dblong_hour %>% select(Date_time,Deployment.number,`Hs[m]`,`Tp[s]`,`Dp[deg]`,`H1/10[m]`,`Tmean[s]`,`Current.Speed[cm/sec]`,`Current.Direction[deg]`,Temp_1hour_mean,Lux_1hour_mean,Turbidity_1hour_mean) %>% 
-  distinct()
-#get all the deployments
-deployments <- unique(dbwide_hour$Deployment.number)
-#prepare the big data frame
-env_corr <- data.frame(dep_num=integer(),
-                       biv_num=character(),
-                       environmental_factor=character(),
-                       corr_values=double(),
-                       p_values=double(),
-                       n=integer()
-)
-
-for (dep in deployments) {
-temp_dep <- dbwide_hour %>% filter(Deployment.number==dep)
-#remove bivalves weren't deployed in the specific deployment
-temp_dep <- temp_dep[,colSums(!is.na(temp_dep))>0]
-# get the bivalves names
-temp_bivalves_id <- names(temp_dep)[3:dim(temp_dep)[2]]
-#filter environmental data to a specific deployment
-temp_env <- environment_wide %>% filter(Deployment.number==dep)
-temp_env <- temp_env %>% select(-Deployment.number)
-for (biv_num in temp_bivalves_id) {
-  temp_biv <- temp_dep[,c(1,which(colnames(temp_dep)==biv_num ))]
-  temp_biv <- merge(temp_biv,temp_env,by="Date_time",all.x=T)
-  #remove datetime
-  temp_biv <- temp_biv %>% select(-Date_time)
-  #getting correlation, p-values and n and convert them to data frame
-  temp_corr <- rcorr(as.matrix(temp_biv),type = "pearson")
-  temp_corr <-data.frame(dep_num = paste("Deployment",dep),
-                       biv_num=biv_num,
-                       #starting from 2 to avoid autocorrelation with the bivalve
-                       #getting the environmental factors names
-                       environmental_factor=colnames(temp_corr[["r"]])[2:length(colnames(temp_corr[["r"]])
-                                                                                )],
-                       corr_values = as.vector(temp_corr[["r"]][1,2:dim(temp_corr[["r"]])[2]]),
-                       p_values = as.vector(temp_corr[["P"]][1,2:dim(temp_corr[["P"]])[2]]),
-                       n = as.vector(temp_corr[["n"]][1,2:dim(temp_corr[["n"]])[2]])
-                       )
-env_corr <- rbind(env_corr,temp_corr)
-  }
-}
-rm(temp_corr,temp_dep,temp_env,temp_biv)
-write.csv(env_corr,"Environmental_correlations_hour_by_Deployment")
-hist(env_corr$corr_values[env_corr$environmental_factor=="Temp_1hour_mean" & env_corr$p_values<0.05],breaks = seq(-1,1,0.1))
-
-
-
-
 #Environmental correlations - hourly, all duration
 #wide bivalves
-dbwide_hour <- dblong_hour %>% select(Date_time,Deployment.number,Bivalve.number,mean.biv.gap.precent) %>%
-  spread(key = Bivalve.number,value = mean.biv.gap.precent)
+dbwide_hour <- dblong_hour %>% select(Date_time,Deployment.number,Bivalve.number,logit_transformation) %>%
+  spread(key = Bivalve.number,value = logit_transformation)
 #wide environment
 environment_wide <- dblong_hour %>% select(Date_time,Deployment.number,`Hs[m]`,`Tp[s]`,`Dp[deg]`,`H1/10[m]`,`Tmean[s]`,`Current.Speed[cm/sec]`,`Current.Direction[deg]`,Temp_1hour_mean,Lux_1hour_mean,Turbidity_1hour_mean) %>% 
   distinct()
@@ -433,7 +393,7 @@ for (biv_num in bivalves_id) {
   #remove datetime
   temp_biv <- temp_biv %>% select(-Deployment.number,-Date_time)
   #getting correlation, p-values and n and convert them to data frame
-  temp_corr <- rcorr(as.matrix(temp_biv),type = "pearson")
+  temp_corr <- rcorr(as.matrix(temp_biv),type = "spearman")
   temp_corr <-data.frame(biv_num=biv_num,
                        #starting from 2 to avoid autocorrelation with the bivalve
                        #getting the environmental factors names 
@@ -446,17 +406,14 @@ for (biv_num in bivalves_id) {
   env_corr <- rbind(env_corr,temp_corr)
 }
 rm(temp_corr,temp_biv)
-hist(env_corr$corr_values[env_corr$environmental_factor=="Temp_1hour_mean" & env_corr$p_values<0.05],breaks = seq(-1,1,0.1))
-write.csv(env_corr,"Environmental_correlations_hour_all_duration.csv")
-
-
-
+hist(env_corr$corr_values[env_corr$environmental_factor=="Temp_1hour_mean"],breaks = seq(-1,1,0.1))
+write.csv(env_corr,"Environmental_correlations_hour_all_duration_spearman_logit.csv")
 
 
 ##Environmental correlations - weekly (chl) 
 #wide bivalves
-dbwide_week <- dblong_week %>% select(group,Deployment.number,Biv_num,biv_open_interval_perc) %>%
-  spread(key = Biv_num,value = biv_open_interval_perc)
+dbwide_week <- dblong_week %>% select(group,Deployment.number,Biv_num,biv_open_perc_logit) %>%
+  spread(key = Biv_num,value = biv_open_perc_logit)
 #prepare the big data frame
 env_corr_week <- data.frame(biv_num=character(),
                        environmental_factor=character(),
@@ -470,7 +427,7 @@ for (biv_num in bivalves_id) {
     temp_biv <- merge(temp_biv,reco,by="group",all.x=T)
     temp_biv <- temp_biv %>% select(-group)
     #getting correlation, p-values and n and convert them to data frame
-    temp_corr <- rcorr(as.matrix(temp_biv),type = "pearson")
+    temp_corr <- rcorr(as.matrix(temp_biv),type = "spearman")
     temp_corr <-data.frame(biv_num=biv_num,
                        #starting from 2 to avoid autocorrelation with the bivalve
                        #getting the environmental factors names
@@ -482,7 +439,7 @@ for (biv_num in bivalves_id) {
     env_corr_week <- rbind(env_corr_week,temp_corr)
 }
 rm(temp_corr)
-write.csv(env_corr_week,"Chl_correlations_week-all_duration.csv")
+write.csv(env_corr_week,"Chl_correlations_week-all_duration_spearman_logit.csv")
 env_corr_week_significant <- env_corr_week %>% filter(p_values<0.05)
 hist(env_corr_week$corr_values,seq(-1,1,by=0.1))
 
@@ -653,11 +610,12 @@ close_limit <- 20
 dblong_3h_bin$DayofYear <- yday(dblong_3h_bin$group)
 dblong_3h_bin$Season <- GetSeason(dblong_3h_bin$DayofYear)
 dblong_3h_bin$open_close <- ifelse(dblong_3h_bin$biv_open_interval_perc>close_limit,"Open","Close")
-bivalves_3h_open_time_ratio <- data.frame(
+bivalves_3h_open_time_ratio_and_perc <- data.frame(
   bivalve_name=character(),
   date=Date(),
   hour=character(),
   open_time_ratio=double(),
+  mean_open_perc=double(),
   n=integer(),
   Season=character()
 )
@@ -668,20 +626,21 @@ for (biv in bivalves_names) {
     temp_date <- temp_biv %>% filter(Day_bin==date)
     temp_date$ThreeHour_bin <-  cut(temp_date$group, breaks= "3 hours")
     temp_date <- temp_date %>% group_by(ThreeHour_bin) %>%
-      summarise(Open_time_ratio=sum(open_close=="Open")/n(),n=n(),season=unique(Season)) 
+      summarise(Open_time_ratio=sum(open_close=="Open")/n(),n=n(),season=unique(Season),mean_open_perc = mean(biv_open_interval_perc)) 
     temp_date <- data.frame(
                  bivalve_name=biv,
                  date=date,
                  hour=format(ymd_hms(temp_date$ThreeHour_bin),"%H:%M"),
                  open_time_ratio=temp_date$Open_time_ratio,
+                 mean_open_perc=temp_date$mean_open_perc,
                  n=temp_date$n,
                  Season=temp_date$season)
-    bivalves_3h_open_time_ratio <- rbind(bivalves_3h_open_time_ratio,temp_date)
+    bivalves_3h_open_time_ratio_and_perc <- rbind(bivalves_3h_open_time_ratio,temp_date)
   }
-}
+}time
 rm(temp_date,temp_biv)
-write.csv(bivalves_3h_open_time_ratio,"Bivalves_3h_open_time_ratio.csv")
-sum_bivalves_3h_open_time_ratio <- bivalves_3h_open_time_ratio %>% 
+write.csv(bivalves_3h_open_time_ratio,"Bivalves_3h_open_time&perc_ratio.csv")
+sum_bivalves_3h_open_time_ratio_and_perc <- bivalves_3h_open_time_ratio %>% 
   group_by(hour,Season) %>% 
   summarise_at(vars(open_time_ratio), funs(mean, median, sd, n())) %>% 
   mutate(conf_int = sd/sqrt(n) * qt(p = 0.975, df = n-1))
@@ -740,7 +699,7 @@ Day_Night_gaping_graph
 ```{r}
 
 #Bivalve correlation graph - without mean!
-correlation_hitsogram <- ggplot(bivalve_corr, aes(corr_values)) +
+correlation_hitsogram <- ggplot(biv_corr_hour, aes(corr_values)) +
                            geom_histogram(binwidth = 0.1,breaks = seq(-1, 1, by = 0.1), 
                                           fill = "antiquewhite1", color = "black") +
                            scale_x_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
@@ -758,7 +717,7 @@ correlation_hitsogram <- ggplot(bivalve_corr, aes(corr_values)) +
                            axis.line.x = element_line(colour = "black"))
                            
  
-correlation_boxplot <- ggplot(bivalve_corr, mapping =  
+correlation_boxplot <- ggplot(biv_corr_hour, mapping =  
                        aes(corr_values))+geom_boxplot(aes(y=corr_values,x=NULL),fill = 
                                                         "antiquewhite1", color = "black")+
                        scale_y_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
