@@ -1,0 +1,129 @@
+---
+title: "stat_analyses"
+author: "Shahar Chaikin"
+date: "2023-12-27"
+output: html_document
+---
+
+Packs.
+```{r}
+library(tidyverse)
+library(glmmTMB)
+library(openxlsx)
+```
+
+Load data
+```{r}
+data <- readRDS("Bivalves_model_df.RDS")
+#extract month
+data <- data %>% 
+  mutate(month=as.factor(month(as.POSIXct(Date_time),label = F)),
+         mean.biv.gap.precent_prop=mean.biv.gap.precent/100) %>% 
+  rename(hs=`Hs[m]`,
+         cs=`Current.Speed[cm/sec]`)
+#add sensor column
+sensor_metadata <- read.xlsx("Bivalves and Environmental sensors Deploymnet Table.xlsx",sheet = "Sensors_Metadata")
+data <- merge(data,sensor_metadata,by = c("Deployment.number","Bivalve.number"),all.x = T)
+
+```
+
+#GLMMs
+#Differences among IDs
+```{r}
+test_IDs_logit <- glmmTMB(data=data,
+                   formula = logit_transformation~
+                     Bivalve.number+
+                     (1|month),
+                   family = gaussian)
+
+#Diagnosis
+sjPlot::plot_model(test_IDs_logit,type="diag")
+#Effect sizes
+sjPlot::plot_model(test_IDs_logit,type="eff")
+
+
+test_IDs_sensors_logit <- glmmTMB(data=data,
+                   formula = logit_transformation~
+                     Bivalve.number+
+                     (1|month)+
+                     (1|Sensor.number),
+                   family = gaussian)
+
+#Diagnosis
+sjPlot::plot_model(test_IDs_sensors_logit,type="diag")
+#Effect sizes
+sjPlot::plot_model(test_IDs_sensors_logit,type="eff")
+MuMIn::r.squaredGLMM(test_IDs_sensors_logit)
+
+```
+
+##logit transformed gaping
+```{r}
+test_logit <- glmmTMB(data=data,
+                   formula = logit_transformation~
+                     hs+
+                     cs+
+                     Turbidity_1hour_mean+
+                     Lux_1hour_mean+
+                     (1|month)+
+                     (1|Bivalve.number)+
+                     (1|Sensor.number),
+                   family = gaussian)
+
+summary(test_logit)
+
+#Diagnosis
+sjPlot::plot_model(test_logit,type="diag")
+performance::check_collinearity(test_logit)
+#Effect sizes
+sjPlot::plot_model(test_logit,type="eff")
+#Conditional and marginal R2
+MuMIn::r.squaredGLMM(test_logit)
+```
+
+##Effect of temperature on gaping
+```{r}
+#Using power transformed
+test_logit_temp <- glmmTMB(data=data,
+                   formula = logit_transformation~
+                     I(Temp_1hour_mean^2)+
+                     (1|month)+
+                     (1|Bivalve.number)+
+                     (1|Sensor.number),
+                   family = gaussian)
+
+summary(test_logit_temp)
+
+#Diagnosis
+sjPlot::plot_model(test_logit_temp,type="diag")
+#Effect sizes
+sjPlot::plot_model(test_logit_temp,type="eff")
+#Extract fitted values and backtransform
+test_logit_temp_predicted <- ggeffects::ggpredict(test_logit_temp,
+                                               terms="Temp_1hour_mean") %>% 
+  mutate(x_bt=sqrt(x))
+
+#GAM
+data$Bivalve.number <- as.factor(data$Bivalve.number)
+data$month <- as.factor(data$month)
+data$Sensor.number <- as.factor(data$Sensor.number)
+test_logit_temp_gam <- mgcv::gam(data = data %>% 
+                                select(logit_transformation,
+                                       Temp_1hour_mean,
+                                       Bivalve.number,
+                                       month,
+                                       Sensor.number) %>% 
+                                drop_na(),
+                              formula = logit_transformation~
+                                s(Temp_1hour_mean)+
+                                s(month, bs = 're')+
+                                s(Bivalve.number, bs = 're')+
+                                s(Sensor.number, bs = 're'),
+                              family = "gaussian",
+                              method = 'REML')
+
+summary(test_logit_temp_gam)
+gratia::appraise(test_logit_temp_gam)
+sjPlot::plot_model(test_logit_temp_gam,type="eff")
+```
+
