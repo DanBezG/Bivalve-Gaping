@@ -15,16 +15,19 @@ library(openxlsx)
 Load data
 ```{r}
 data <- readRDS("Bivalves_model_df.RDS")
+data_chl <- readRDS("Bivalves_model_chl_df.RDS")
 #extract month
 data <- data %>% 
   mutate(month=as.factor(month(as.POSIXct(Date_time),label = F)),
          mean.biv.gap.precent_prop=mean.biv.gap.precent/100) %>% 
   rename(hs=`Hs[m]`,
          cs=`Current.Speed[cm/sec]`)
+data_chl <- data_chl %>% mutate(month=as.factor(month(as.POSIXct(group),label = F))) %>% 
+  rename(Bivalve.number=Biv_num)
 #add sensor column
 sensor_metadata <- read.xlsx("Bivalves and Environmental sensors Deploymnet Table.xlsx",sheet = "Sensors_Metadata")
 data <- merge(data,sensor_metadata,by = c("Deployment.number","Bivalve.number"),all.x = T)
-
+data_chl <- merge(data_chl,sensor_metadata,by = c("Deployment.number","Bivalve.number"),all.x = T)
 ```
 
 #GLMMs
@@ -79,6 +82,26 @@ performance::check_collinearity(test_logit)
 sjPlot::plot_model(test_logit,type="eff")
 #Conditional and marginal R2
 MuMIn::r.squaredGLMM(test_logit)
+```
+
+##weekly Chl logit transformed gaping
+```{r}
+test_logit_chl <- glmmTMB(data=data_chl,
+                   formula = biv_open_perc_logit~
+                     Chl+
+                     (1|month)+
+                     (1|Bivalve.number)+
+                     (1|Sensor.number),
+                   family = gaussian)
+
+summary(test_logit_chl)
+
+#Diagnosis
+sjPlot::plot_model(test_logit_chl,type="diag")
+#Effect sizes
+sjPlot::plot_model(test_logit_chl,type="eff")
+#Conditional and marginal R2
+MuMIn::r.squaredGLMM(test_logit_chl)
 ```
 
 ##Effect of temperature on gaping
