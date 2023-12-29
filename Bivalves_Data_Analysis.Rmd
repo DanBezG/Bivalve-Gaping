@@ -106,7 +106,7 @@ dblong_hour <- read.csv("Big_Hobo_databse_long_hour_percent&env.csv")
 ##Change raw data to long format
 
 ```{r}
-col_names<-c("Bivalve.4","Bivalve.6","Bivalve.7","Bivalve.8","Bivalve.0","Bivalve.12","Bivalve.21...","Bivalve.19","Bivavle.15","Bivavle.18","Bivavle.23","Bivavle.22")
+col_names<-colnames(db)[3:dim(db)[2]]
 dblong<-gather_(db,"Biv_num","biv_open",col_names,factor_key = T,na.rm = T)
 dblong$Date...Time <- parse_date_time(dblong$Date...Time,orders = "dmy HMS",truncated = 3)
 write.csv(dblong,"Big_Hobo_databse_long_raw.csv")
@@ -129,6 +129,7 @@ for (dep_num in 1:max_deploy) {
 rm(temp_array_bivnum,temp_array_deploy)
 dblong$biv_open_percent <- dblong$biv_open/dblong$percentile.99*100
 dblong$biv_open_percent <- ifelse(dblong$biv_open_percent>100,100,dblong$biv_open_percent)
+#calculate logit
 dblong$logit_transformation <- logit(dblong$biv_open_percent)
 write.csv(dblong,"Big_Hobo_databse_long_raw_percent.csv")
 ```
@@ -213,6 +214,8 @@ env_10min_to_1hour <-env_10min_to_1hour %>%
 dblong_hour<-merge(dblong_hour,env_10min_to_1hour,by="Date_time",all.x = T)
 rm(env_10min_to_1hour)
 write.csv(dblong_hour, "Big_Hobo_databse_long_hour_percent&env.csv")
+db_model <- dblong_hour %>% select(Date_time,Deployment.number,Bivalve.number,mean.biv.gap.precent,logit_transformation,`Hs[m]`,`Current.Speed[cm/sec]`,Temp_1hour_mean,Turbidity_1hour_mean,Lux_1hour_mean)
+saveRDS(db_model,"Bivalves_model_df.RDS")
 ```
 
 ##Env_daily
@@ -235,7 +238,6 @@ env_1hour_to_day$Date_time <- parse_date_time(env_1hour_to_day$Date_time,orders 
 env_1hour_to_day$Date_time <- cut(env_1hour_to_day$Date_time, breaks= "1 day")
 env_1hour_to_day$`Hs[m]` <- as.numeric(env_1hour_to_day$`Hs[m]`)
 env_1hour_to_day$`Current.Speed[cm/sec]` <- as.numeric(env_1hour_to_day$`Current.Speed[cm/sec]`)
-env_1hour_to_day$`Hs[m]` <- as.numeric(env_1hour_to_day$`Hs[m]`)
 env_1hour_to_day <-env_1hour_to_day %>%
   group_by(Date_time) %>%
   summarise(Hs_1day_mean=mean(`Hs[m]`,na.rm=T))
@@ -334,13 +336,14 @@ saveRDS(dblong2,"Big_Hobo_database_long_2min_percent&sun.RDS")
 ```
 
 
-##Bivalves correlations - per deployment
+##Bivalves correlations - per deployment 
 ```{r}
-#Bivalves correlations - correlation between each bivalve pair in a singe deployment
+#Bivalves correlations 
 dbwide2 <- dblong2 %>% select(group,Deployment.number,Biv_num,biv_open_perc_logit) %>% 
   spread(key = Biv_num,value = biv_open_perc_logit)
 write.csv(dbwide2,"Big_Hobo_database_wide_2min_logit.csv")
 deployments <- unique(dbwide2$Deployment.number)
+#correlation between each bivalve pair in a singe deployment
 bivalve_corr <- data.frame(dep_num=integer(),
                            corr_values=double(),
                            p_values=double(),
@@ -363,7 +366,8 @@ bivalve_corr <- rbind(bivalve_corr,temp_corr)
 }
 rm(temp_corr,temp_dep)
 write.csv(bivalve_corr,"Bivalves_correlations_spearman.csv")
-hist(biv_corr_day$corr_values,breaks = seq(-1,1,0.1))
+hist(biv_corr_hour$corr_values,breaks = seq(-1,1,0.1))
+
 ```
 
 
@@ -486,7 +490,7 @@ write.csv(env_corr_day,"Environmental_correlations_day_all_bivalves.csv")
 ##Bivalve opening times(how much time was open in whole duration/daily/3h)
 ```{r}
 ###check mean and max opening time for each bivalve for the whole deployments duration
-bivalves_names<-unique(dblong2$Biv_num)
+bivalves_names<-unique(as.character(dblong2$Biv_num))
 #prepare the data frame
 bivalves_opening_times<-data.frame(
   bivalve_name=character(),
@@ -556,8 +560,8 @@ for (limit in precent_limits) {
 write.csv(bivalves_opening_times,"Bivalves_open_all_duration.csv")
 opening_interval_sum<- bivalves_opening_times %>% 
   group_by(limit)%>%
- summarise(biv_open_interval_mean=mean(mean.opening.time),sd_opening_time=sd(mean.opening.time),n=n(),biv_total_open_perc=mean(total_time_open),sd.total_time_open=sd(total_time_open))%>%
-
+ summarise(biv_open_interval_mean=mean(mean.opening.time),sd_opening_time=sd(mean.opening.time),n=n(),biv_total_open_perc=mean(total_time_open),sd.total_time_open=sd(total_time_open))
+write.csv(opening_interval_sum,"Bivalves_opening_interval_summary_by_limit.csv")
 
   
   
@@ -602,7 +606,8 @@ for (limit in precent_limits) {
 
 
 
-##check mean and max opening time for in 3 hours bins
+##check mean and max opening time for in 3 hours bins and continous
+##3hours bins
 dblong_3h_bin <- dblong2 %>% select(-Sunset,-Sunrise)
 dblong_3h_bin$Day_bin <- cut(dblong_3h_bin$group, breaks= "1 day")
 #chose 20 just to see if works
@@ -635,19 +640,58 @@ for (biv in bivalves_names) {
                  mean_open_perc=temp_date$mean_open_perc,
                  n=temp_date$n,
                  Season=temp_date$season)
-    bivalves_3h_open_time_ratio_and_perc <- rbind(bivalves_3h_open_time_ratio,temp_date)
+    bivalves_3h_open_time_ratio_and_perc <- rbind(bivalves_3h_open_time_ratio_and_perc,temp_date)
   }
-}time
+}
 rm(temp_date,temp_biv)
-write.csv(bivalves_3h_open_time_ratio,"Bivalves_3h_open_time&perc_ratio.csv")
-sum_bivalves_3h_open_time_ratio_and_perc <- bivalves_3h_open_time_ratio %>% 
+write.csv(bivalves_3h_open_time_ratio_and_perc,"Bivalves_3h_open_time&perc_ratio.csv")
+sum_bivalves_3h_open_time_ratio_and_perc <- bivalves_3h_open_time_ratio_and_perc %>% 
   group_by(hour,Season) %>% 
   summarise_at(vars(open_time_ratio), funs(mean, median, sd, n())) %>% 
   mutate(conf_int = sd/sqrt(n) * qt(p = 0.975, df = n-1))
 write.csv(sum_bivalves_3h_open_time_ratio,"Bivalves_3h_open_time_ratio_sum.csv")
+
 ```
 
-## Seasonal & Daily trend Plot
+##Monthly Environemntal data
+```{r}
+env_10min_to_month <- dblong10 %>% 
+  select(Temp,lux,Turbidity,group) %>% 
+  distinct()
+env_10min_to_month$group <- parse_date_time(env_10min_to_month$group,orders = "ymd HMS")
+env_10min_to_month$Date_time <- cut(env_10min_to_month$group, breaks= "1 month")
+env_10min_to_month$Temp <- as.numeric(env_10min_to_month$Temp)
+env_10min_to_month$lux <- as.numeric(env_10min_to_month$lux)
+env_10min_to_month$Turbidity <- as.numeric(env_10min_to_month$Turbidity)
+env_10min_to_month <-env_10min_to_month %>%
+  group_by(Date_time) %>%
+  summarise_at(vars(Temp,lux,Turbidity), funs(mean(.,na.rm=T),n(),sd(.,na.rm=T)))
+env_1hour_to_month <- dblong_hour %>% 
+  select(Date_time,`Hs[m]`,`Current.Speed[cm/sec]`) %>% 
+  distinct()
+env_1hour_to_month$Date_time <- parse_date_time(env_1hour_to_month$Date_time,orders = "ymd HMS")
+env_1hour_to_month$Date_time <- cut(env_1hour_to_month$Date_time, breaks= "1 month")
+env_1hour_to_month$`Hs[m]` <- as.numeric(env_1hour_to_month$`Hs[m]`)
+env_1hour_to_month$`Current.Speed[cm/sec]` <- as.numeric(env_1hour_to_month$`Current.Speed[cm/sec]`)
+env_1hour_to_month <-env_1hour_to_month %>%
+  group_by(Date_time) %>%
+  summarise_at(vars(`Hs[m]`,`Current.Speed[cm/sec]`), funs(mean(.,na.rm=T),n(),sd(.,na.rm=T)))
+env_month <- merge(env_10min_to_month,env_1hour_to_month,by="Date_time")
+
+env_1week_to_month <- dblong_week %>% select(group,Chl) %>% distinct()
+env_1week_to_month$Date_time <- parse_date_time(env_1week_to_month$group,orders = "ymd")
+env_1week_to_month$Date_time <- cut(env_1week_to_month$Date_time, breaks= "1 month")
+env_1week_to_month$Chl <- as.numeric(env_1week_to_month$Chl)
+env_1week_to_month <-env_1week_to_month %>%
+  group_by(Date_time) %>%
+  summarise_at(vars(Chl), funs(mean(.,na.rm=T),n(),sd(.,na.rm=T)))
+env_month <- merge(env_month,env_1week_to_month,by="Date_time")
+names(env_month)[17:19] <- c("Chl","Chl_n","Chl_sd")
+write.csv(env_month,"Environmental_data_by_month.csv")
+
+```
+
+##Seasonal & Daily trend Plot
 
 ```{r}
 #seasonal and daily trend along bivalves - Work!
