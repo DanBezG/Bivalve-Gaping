@@ -368,6 +368,13 @@ rm(temp_corr,temp_dep)
 write.csv(bivalve_corr,"Bivalves_correlations_spearman.csv")
 hist(biv_corr_hour$corr_values,breaks = seq(-1,1,0.1))
 
+biv_corr_all_res <- rbind(bivalve_corr,biv_corr_hour,biv_corr_day)
+biv_corr_sum <- biv_corr_all_res %>% 
+  group_by(res) %>% 
+  summarise_at(vars(corr_values), funs(mean, median, sd, n())) %>% 
+  mutate(conf_int = sd/sqrt(n) * qt(p = 0.975, df = n-1))
+write.csv(biv_corr_sum,"Biv_corr_sum.csv")
+
 ```
 
 
@@ -647,7 +654,7 @@ rm(temp_date,temp_biv)
 write.csv(bivalves_3h_open_time_ratio_and_perc,"Bivalves_3h_open_time&perc_ratio.csv")
 sum_bivalves_3h_open_time_ratio_and_perc <- bivalves_3h_open_time_ratio_and_perc %>% 
   group_by(hour,Season) %>% 
-  summarise_at(vars(open_time_ratio), funs(mean, median, sd, n())) %>% 
+  summarise_at(vars(open_time_ratio,mean_open_perc), funs(mean, median, sd, n())) %>% 
   mutate(conf_int = sd/sqrt(n) * qt(p = 0.975, df = n-1))
 write.csv(sum_bivalves_3h_open_time_ratio,"Bivalves_3h_open_time_ratio_sum.csv")
 
@@ -691,7 +698,7 @@ write.csv(env_month,"Environmental_data_by_month.csv")
 
 ```
 
-##Seasonal & Daily trend Plot
+##Annual Cycle Plot
 
 ```{r}
 #seasonal and daily trend along bivalves - Work!
@@ -702,7 +709,7 @@ months_gaping_graph <- ggplot(dblong2, aes(x = TimeofDay, y = biv_open_interval_
   geom_point(color = "grey", size = 0.1)+
   geom_smooth(linewidth = 2, color = "blue",se = T,fill="red")+
   scale_x_datetime( date_breaks = "4 hours",date_labels = "%H:%M") +
-  scale_y_continuous(limits = c(0,100))+
+  scale_y_continuous(limits = c(0,100),breaks = seq(0,100,by=10))+
   facet_wrap(~Month, scales = "free_x", ncol = length(unique(dblong2$Month))) +
   labs(x = "Time of Day",
        y = "Gaping Percent") +
@@ -720,6 +727,48 @@ months_gaping_graph <- ggplot(dblong2, aes(x = TimeofDay, y = biv_open_interval_
         legend.text = element_text(size = 14))
   months_gaping_graph
   
+```
+
+##Open_time_ratio & open_perc seasonal plot
+```{r}
+season_open_time_graph <- ggplot(data = sum_bivalves_1h_open_time_ratio_and_perc, aes(x = hour, y = mean,color=Season,group=Season))+
+  geom_line(size=1.5)+
+  geom_ribbon(aes(ymin=mean-conf_int,ymax=mean+conf_int,fill=Season),color="black",alpha=0.1)+
+  scale_y_continuous(limits = c(0,1),breaks = seq(0,1,by=0.1))+
+  labs(x = "Time of Day",
+       y = "Open time ratio") +
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        strip.background = element_rect(fill="white",color="black", linewidth = 1.5, linetype="solid"),
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_blank(),
+        axis.text.y = element_text(size = 14),
+        axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+        strip.text = element_text(size = 14),
+        legend.text = element_text(size = 14))
+
+season_open_perc_graph <- ggplot(data = sum_bivalves_1h_perc, aes(x = hour, y = mean,color=Season,group=Season))+
+  geom_line(size=1.5)+
+  geom_ribbon(aes(ymin=mean-conf_int,ymax=mean+conf_int,fill=Season),color="black",alpha=0.1)+
+  scale_y_continuous(limits = c(0,1),breaks = seq(0,1,by=0.1))+
+  labs(x = "Time of Day",
+       y = "Mean opening") +
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        strip.background = element_rect(fill="white",color="black", linewidth = 1.5, linetype="solid"),
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_blank(),
+        axis.text.y = element_text(size = 14),
+        axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+        strip.text = element_text(size = 14),
+        legend.text = element_text(size = 14))
+open_perc_time_ratio_season_graph <-season_open_time_graph/season_open_perc_graph 
 ```
 
 ##Day_night plot
@@ -742,12 +791,13 @@ Day_Night_gaping_graph
 ##Correlations plot - bivalves and environmental
 ```{r}
 
-#Bivalve correlation graph - without mean!
-correlation_hitsogram <- ggplot(biv_corr_hour, aes(corr_values)) +
-                           geom_histogram(binwidth = 0.1,breaks = seq(-1, 1, by = 0.1), 
+#Bivalve correlation graph 
+biv_2min_correlation_hitsogram <- ggplot(bivalve_corr, aes(corr_values)) +
+                           geom_histogram(binwidth = 0.1,breaks = seq(-1, 1, by = 0.1),
                                           fill = "antiquewhite1", color = "black") +
                            scale_x_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
                                             0.2),minor_breaks = seq(-1, 1, by = 0.1))+
+                           scale_y_continuous(limits = c(0,40))+
                            labs(x = "Correlation values",y = "Count")+
                            geom_vline(xintercept = 0, linetype = "dashed", color = "red", 
                                       size = 1)+
@@ -761,9 +811,12 @@ correlation_hitsogram <- ggplot(biv_corr_hour, aes(corr_values)) +
                            axis.line.x = element_line(colour = "black"))
                            
  
-correlation_boxplot <- ggplot(biv_corr_hour, mapping =  
-                       aes(corr_values))+geom_boxplot(aes(y=corr_values,x=NULL),fill = 
-                                                        "antiquewhite1", color = "black")+
+biv_2min_correlation_boxplot <- ggplot(bivalve_corr, mapping =  
+                       aes(corr_values))+
+                       geom_boxplot(aes(y=corr_values,x=NULL),fill =
+                                      "antiquewhite1", color = "black")+
+                       stat_summary(mapping = aes(y = corr_values, x=0),fun =
+                                      mean,geom="point",color="blue", shape = 18,size =4)+
                        scale_y_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
                                           0.2),minor_breaks = seq(-1, 1, by = 0.1) )+
                        geom_hline(yintercept = 0, linetype = "dashed", color = "red", 
@@ -777,9 +830,112 @@ correlation_boxplot <- ggplot(biv_corr_hour, mapping =
                        axis.ticks.y = element_blank(),
                        axis.title.y = element_blank(),
                        axis.text.y = element_blank())
-biv_corr_plot <- correlation_boxplot/correlation_hitsogram+
+biv_2min_corr_plot <- biv_2min_correlation_boxplot/biv_2min_correlation_hitsogram+
              plot_layout(heights = c(0.2,4))+
-             plot_annotation(title = 'Bivalves Correlations')
+             plot_annotation(title = 'Bivalves Correlations 2 min')
+
+biv_1hour_correlation_hitsogram <- ggplot(biv_corr_hour, aes(corr_values)) +
+                           geom_histogram(binwidth = 0.1,breaks = seq(-1, 1, by = 0.1),
+                                          fill = "lightpink", color = "black") +
+                           scale_x_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
+                                            0.2),minor_breaks = seq(-1, 1, by = 0.1))+
+                           scale_y_continuous(limits = c(0,40))+
+                           labs(x = "Correlation values",y = "Count")+
+                           geom_vline(xintercept = 0, linetype = "dashed", color = "red", 
+                                      size = 1)+
+                           theme_bw()+
+                           theme(title=element_blank(),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.background = element_blank(),
+                           panel.border = element_blank(),
+                           axis.line.y = element_line(colour = "black"),
+                           axis.line.x = element_line(colour = "black"))
+biv_1hour_correlation_boxplot <- ggplot(biv_corr_hour, mapping =  
+                       aes(corr_values))+
+                       geom_boxplot(aes(y=corr_values,x=NULL),fill =
+                                                        "lightpink", color = "black")+
+                       stat_summary(mapping = aes(y = corr_values, x=0),fun =
+                                      mean,geom="point",color="blue", shape = 18, size = 4)+
+                       scale_y_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
+                                          0.2),minor_breaks = seq(-1, 1, by = 0.1) )+
+                       geom_hline(yintercept = 0, linetype = "dashed", color = "red", 
+                                      size = 1)+
+                       coord_flip()+
+                       theme_bw()+
+                       theme_void()+
+                       theme(panel.grid.major = element_blank(),
+                       panel.grid.minor = element_blank(),
+                       panel.background = element_blank(),
+                       axis.ticks.y = element_blank(),
+                       axis.title.y = element_blank(),
+                       axis.text.y = element_blank())
+biv_1hour_corr_plot <- biv_1hour_correlation_boxplot/biv_1hour_correlation_hitsogram+
+             plot_layout(heights = c(0.2,4))+
+             plot_annotation(title = 'Bivalves Correlations 1 hour')
+
+biv_1day_correlation_hitsogram <- ggplot(biv_corr_day, aes(corr_values)) +
+                           geom_histogram(binwidth = 0.1,breaks = seq(-1, 1, by = 0.1),
+                                          fill = "coral1", color = "black") +
+                           scale_x_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
+                                            0.2),minor_breaks = seq(-1, 1, by = 0.1))+
+                           scale_y_continuous(limits = c(0,40))+
+                           labs(x = "Correlation values",y = "Count")+
+                           geom_vline(xintercept = 0, linetype = "dashed", color = "red", 
+                                      size = 1)+
+                           theme_bw()+
+                           theme(title=element_blank(),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.background = element_blank(),
+                           panel.border = element_blank(),
+                           axis.line.y = element_line(colour = "black"),
+                           axis.line.x = element_line(colour = "black"))
+biv_1day_correlation_boxplot <- ggplot(biv_corr_day, mapping =  
+                       aes(corr_values))+
+                       geom_boxplot(aes(y=corr_values,x=NULL),fill =
+                                                        "coral1", color = "black")+
+                       stat_summary(mapping = aes(y = corr_values, x=0),fun =
+                                      mean,geom="point",color="blue", shape = 18, size = 4)+
+                       scale_y_continuous(limits = c(-1,1),breaks =seq(-1, 1, by = 
+                                          0.2),minor_breaks = seq(-1, 1, by = 0.1) )+
+                       geom_hline(yintercept = 0, linetype = "dashed", color = "red", 
+                                      size = 1)+
+                       coord_flip()+
+                       theme_bw()+
+                       theme_void()+
+                       theme(panel.grid.major = element_blank(),
+                       panel.grid.minor = element_blank(),
+                       panel.background = element_blank(),
+                       axis.ticks.y = element_blank(),
+                       axis.title.y = element_blank(),
+                       axis.text.y = element_blank())
+biv_1day_corr_plot <- biv_1day_correlation_boxplot/biv_1day_correlation_hitsogram+
+             plot_layout(heights = c(0.2,4))+
+             plot_annotation(title = 'Bivalves Correlations 1 day')
+biv_corr_plot <- ggarrange(biv_2min_corr_plot,biv_1hour_corr_plot,biv_1day_corr_plot,nrow = 3)
+
+#bivalve correlation boxplot
+res_order <- c("2min","1hour","1day")
+biv_cor_res_boxplot <- ggplot(biv_corr_all_res,mapping = aes(x=factor(res,res_order),y=corr_values))+
+  geom_violin(fill="coral1")+
+  geom_boxplot(width=0.2)+
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", 
+                                      size = 1)+
+  coord_flip()+
+  geom_point(data = biv_corr_sum,mapping = aes(x=res,y=mean),color="blue",shape=18,size=4)+
+  geom_errorbar(data = biv_corr_sum,mapping = aes(x=res,y=mean,ymin=mean-conf_int, ymax=mean+conf_int),width=0.1,color="blue")+
+  labs(x="Resolution",y="Correlation Values")+
+  scale_y_continuous(limits = c(-1,1),breaks = seq(-1,1,0.1))+
+  theme_bw()+
+                           theme(title=element_blank(),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.background = element_blank(),
+                           panel.border = element_blank(),
+                           axis.line.y = element_line(colour = "black"),
+                           axis.line.x = element_line(colour = "black"))
+
 
 
 #Environmental correlation graph - Without mean!
