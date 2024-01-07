@@ -89,6 +89,7 @@ library(StreamMetabolism) #for getting sunrise and sunset
 library(patchwork)
 library(ggpubr)
 
+
 ```
 
 ##load data
@@ -494,7 +495,7 @@ rm(temp_corr)
 write.csv(env_corr_day,"Environmental_correlations_day_all_bivalves.csv")
 
 ```
-##Bivalve opening times(how much time was open in whole duration/daily/3h)
+##Bivalve opening times(how much time was open in whole duration/daily/hourly)
 ```{r}
 ###check mean and max opening time for each bivalve for the whole deployments duration
 bivalves_names<-unique(as.character(dblong2$Biv_num))
@@ -567,7 +568,8 @@ for (limit in precent_limits) {
 write.csv(bivalves_opening_times,"Bivalves_open_all_duration.csv")
 opening_interval_sum<- bivalves_opening_times %>% 
   group_by(limit)%>%
- summarise(biv_open_interval_mean=mean(mean.opening.time),sd_opening_time=sd(mean.opening.time),n=n(),biv_total_open_perc=mean(total_time_open),sd.total_time_open=sd(total_time_open))
+ summarise(biv_open_interval_mean=mean(mean.opening.time),sd_opening_time=sd(mean.opening.time),n=n(),biv_total_open_perc=mean(total_time_open),sd.total_time_open=sd(total_time_open)) %>% 
+  mutate(conf_int_open_interval = sd_opening_time/sqrt(n) * qt(p = 0.975, df = n-1) )
 write.csv(opening_interval_sum,"Bivalves_opening_interval_summary_by_limit.csv")
 
   
@@ -613,16 +615,15 @@ for (limit in precent_limits) {
 
 
 
-##check mean and max opening time for in 3 hours bins and continous
-##3hours bins
-dblong_3h_bin <- dblong2 %>% select(-Sunset,-Sunrise)
-dblong_3h_bin$Day_bin <- cut(dblong_3h_bin$group, breaks= "1 day")
+##check mean opening ratio for in 1 hours bins for 20 precent closing
+dblong_1h_bin <- dblong2 %>% select(-Sunset,-Sunrise)
+dblong_1h_bin$Day_bin <- cut(dblong_1h_bin$group, breaks= "1 day")
 #chose 20 just to see if works
 close_limit <- 20
-dblong_3h_bin$DayofYear <- yday(dblong_3h_bin$group)
-dblong_3h_bin$Season <- GetSeason(dblong_3h_bin$DayofYear)
-dblong_3h_bin$open_close <- ifelse(dblong_3h_bin$biv_open_interval_perc>close_limit,"Open","Close")
-bivalves_3h_open_time_ratio_and_perc <- data.frame(
+dblong_1h_bin$DayofYear <- yday(dblong_1h_bin$group)
+dblong_1h_bin$Season <- GetSeason(dblong_1h_bin$DayofYear)
+dblong_1h_bin$open_close <- ifelse(dblong_1h_bin$biv_open_interval_perc>close_limit,"Open","Close")
+bivalves_1h_open_time_ratio_and_perc <- data.frame(
   bivalve_name=character(),
   date=Date(),
   hour=character(),
@@ -632,12 +633,12 @@ bivalves_3h_open_time_ratio_and_perc <- data.frame(
   Season=character()
 )
 for (biv in bivalves_names) {
-  temp_biv <- dblong_3h_bin %>% filter(Biv_num==biv)
+  temp_biv <- dblong_1h_bin %>% filter(Biv_num==biv)
   temp_dates_list <-unique(temp_biv$Day_bin)
   for (date in temp_dates_list) {
     temp_date <- temp_biv %>% filter(Day_bin==date)
-    temp_date$ThreeHour_bin <-  cut(temp_date$group, breaks= "3 hours")
-    temp_date <- temp_date %>% group_by(ThreeHour_bin) %>%
+    temp_date$Hour_bin <-  cut(temp_date$group, breaks= "1 hours")
+    temp_date <- temp_date %>% group_by(Hour_bin) %>%
       summarise(Open_time_ratio=sum(open_close=="Open")/n(),n=n(),season=unique(Season),mean_open_perc = mean(biv_open_interval_perc)) 
     temp_date <- data.frame(
                  bivalve_name=biv,
@@ -647,16 +648,16 @@ for (biv in bivalves_names) {
                  mean_open_perc=temp_date$mean_open_perc,
                  n=temp_date$n,
                  Season=temp_date$season)
-    bivalves_3h_open_time_ratio_and_perc <- rbind(bivalves_3h_open_time_ratio_and_perc,temp_date)
+    bivalves_1h_open_time_ratio_and_perc <- rbind(bivalves_1h_open_time_ratio_and_perc,temp_date)
   }
 }
 rm(temp_date,temp_biv)
-write.csv(bivalves_3h_open_time_ratio_and_perc,"Bivalves_3h_open_time&perc_ratio.csv")
-sum_bivalves_3h_open_time_ratio_and_perc <- bivalves_3h_open_time_ratio_and_perc %>% 
+write.csv(bivalves_1h_open_time_ratio_and_perc,"Bivalves_1h_open_time&perc_ratio.csv")
+sum_bivalves_1h_open_time_ratio_and_perc <- bivalves_1h_open_time_ratio_and_perc %>% 
   group_by(hour,Season) %>% 
   summarise_at(vars(open_time_ratio,mean_open_perc), funs(mean, median, sd, n())) %>% 
   mutate(conf_int = sd/sqrt(n) * qt(p = 0.975, df = n-1))
-write.csv(sum_bivalves_3h_open_time_ratio,"Bivalves_3h_open_time_ratio_sum.csv")
+write.csv(sum_bivalves_1h_open_time_ratio,"Bivalves_1h_open_time_ratio_sum.csv")
 
 ```
 
@@ -695,6 +696,15 @@ env_1week_to_month <-env_1week_to_month %>%
 env_month <- merge(env_month,env_1week_to_month,by="Date_time")
 names(env_month)[17:19] <- c("Chl","Chl_n","Chl_sd")
 write.csv(env_month,"Environmental_data_by_month.csv")
+
+```
+
+##FFT calc
+```{r}
+x <- fft(dblong2$biv_open_perc_logit[dblong2$Biv_num=="Bivalve.0"])
+plot(Mod(x), type = "l", main = "FFT Magnitudes")
+which.max(abs(x))
+abs(x)[5]
 
 ```
 
@@ -915,11 +925,10 @@ biv_1day_corr_plot <- biv_1day_correlation_boxplot/biv_1day_correlation_hitsogra
              plot_annotation(title = 'Bivalves Correlations 1 day')
 biv_corr_plot <- ggarrange(biv_2min_corr_plot,biv_1hour_corr_plot,biv_1day_corr_plot,nrow = 3)
 
-#bivalve correlation boxplot
+#bivalve correlation violin
 res_order <- c("2min","1hour","1day")
-biv_cor_res_boxplot <- ggplot(biv_corr_all_res,mapping = aes(x=factor(res,res_order),y=corr_values))+
-  geom_violin(fill="coral1")+
-  geom_boxplot(width=0.2)+
+biv_cor_res_violin <- ggplot(biv_corr_all_res,mapping = aes(x=factor(res,res_order),y=corr_values))+
+  geom_violin(fill="firebrick2")+
   geom_hline(yintercept = 0, linetype = "dashed", color = "black", 
                                       size = 1)+
   coord_flip()+
@@ -996,10 +1005,15 @@ corr_plot <- ggarrange(biv_corr_plot,env_corr_plots[[1]],env_corr_plots[[2]],env
 ##Opening times violin plot
 ```{r}
 bivalves_opening_times$limit <- as.factor(bivalves_opening_times$limit )
-opening_violin_plot <- ggplot(bivalves_opening_times,aes(x=limit,y=mean.opening.time)
-                              )+
-                       geom_violin(aes(fill=limit))+
-                       geom_boxplot(width=0.1, color="black",fill="white") +
+opening_interval_sum$limit <-  as.factor(opening_interval_sum$limit )
+opening_interval_diff_closing_prec_plot <-        
+                       ggplot(bivalves_opening_times,aes(x=limit,y=mean.opening.time))+
+                       geom_boxplot(width=0.3, color="black",fill="white") +
+                       geom_point(data = opening_interval_sum,mapping = 
+                                    aes(y=biv_open_interval_mean),color="blue",shape=18,size=4)+
+                       geom_errorbar(data = opening_interval_sum,mapping = 
+                         aes(y=biv_open_interval_mean,ymin=biv_open_interval_mean-conf_int_open_interval,
+                             ymax=biv_open_interval_mean+conf_int_open_interval),width=0.1,color="blue")+
                        labs(x = "Close definition percentage [%]", y = "Mean opening interval [min]")+
                        scale_y_continuous(breaks = seq(0,120,by=10))+
                        theme_bw()+
