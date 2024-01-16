@@ -73,23 +73,39 @@ logit <- function(percentage) {
     logit <- log(odd_precent)
     return(logit)
 }
+
+split_rows_by_hours_tal <- function(row) {
+   start_hour <- as.POSIXlt(row$Time.Start, format="%H:%M:%S")$hour
+   end_hour <- as.POSIXlt(row$Time.end, format="%H:%M:%S")$hour
+  
+  if (start_hour != end_hour) {
+    # Create new rows with adjusted time for each hour within the activity duration
+      new_rows <- lapply(seq(start_hour, end_hour,by = 1), function(hour) {
+      row_copy <- row
+      row_copy$Time.Start <- if (hour == start_hour) row$Time.Start else paste(sprintf("%02d", hour), "00", "00", sep=":")
+      row_copy$Time.end <- if (hour == end_hour) row$Time.end else paste(sprintf("%02d", hour), "59", "59", sep=":")
+      return(row_copy)
+    })
+    
+    return(bind_rows(new_rows))
+  } else {
+    return(row)
+  }
+}
 ```
 
 ##packages
 
 ```{r}
-library(dplyr)
-library(ggplot2)
+library(tidyverse)
 library(lubridate)
 library(openxlsx)
-library(tidyr)
 library(scales)
 library(Hmisc) # for function rcorr
 library(StreamMetabolism) #for getting sunrise and sunset
 library(patchwork)
 library(ggpubr)
-
-
+library(ggformula)
 ```
 
 ##load data
@@ -699,6 +715,52 @@ write.csv(env_month,"Environmental_data_by_month.csv")
 
 ```
 
+##Tal Amit's Data analysis
+```{r}
+tal_spring <- read.csv("Gaping data Tal Amit Fall.csv")
+#Filtering only the right rows and columns
+tal_spring <- tal_spring[1:495,]
+tal_spring <- tal_spring %>% select(-Sunset.time,-Sunrise.time,-Time.from.sunrise)
+tal_spring$Date <- as.Date(tal_spring$Date,format="%d.%m.%Y")
+#new df with distinct hours
+tal_spring_new <-data.frame(Date=Date(),
+                            Time.Start = character(),
+                            Time.end = character(),
+                            Hour.Start=integer(),
+                            Hour.End=integer(),
+                            duration = character(),
+                            bivalve.code = integer(),
+                            status=integer(),
+                            Open.precentage = double(),
+                            Comments=character())
+#fill in the new df
+for (biv_num in unique(tal_spring$bivalve.code)) {
+  temp_biv <- tal_spring %>% filter(bivalve.code==biv_num)
+  for (day in unique(temp_biv$Date)) {
+    temp_date <- temp_biv %>% filter(Date == day)
+    for (row_num in 1:dim(temp_date)[1]) {
+    
+      temp_row <- split_rows_by_hours_tal(temp_date[row_num,])
+      tal_spring_new <- rbind(tal_spring_new,temp_row)
+    }                              
+  }
+}
+tal_spring_new$Time.Start <- as.POSIXct(tal_spring_new$Time.Start, format = "%H:%M:%S")
+tal_spring_new$Time.end <- as.POSIXct(tal_spring_new$Time.end, format = "%H:%M:%S")
+#calculate duration and ratio from hour
+tal_spring_new$Duration <- difftime(tal_spring_new$Time.end, tal_spring_new$Time.Start,units = "mins")
+tal_spring_new$hour_ratio <- as.numeric(tal_spring_new$Duration)/60
+tal_spring_new$Hour <- format(tal_spring_new$Time.Start,format = "%H")
+#Filter the wide open and sum
+tal_sum_by_hour <- tal_spring_new[tal_spring_new$Open.precentage==1,]
+tal_sum_by_hour <- tal_sum_by_hour %>%group_by(bivalve.code,Hour,Date) %>%  summarise(open_hour_ratio=sum(hour_ratio))
+write.csv(tal_sum_by_hour,"Gaping data Tal Amit Fall_sum_by_hour.csv")
+
+
+tal_fall <- read.csv("Gaping data Tal Amit Fall.csv")
+tal_fall <- tal_fall[1:495,]
+```
+
 ##FFT calc
 ```{r}
 x <- fft(dblong2$biv_open_perc_logit[dblong2$Biv_num=="Bivalve.0"])
@@ -783,19 +845,61 @@ open_perc_time_ratio_season_graph <-season_open_time_graph/season_open_perc_grap
 
 ##Day_night plot
 ```{r}
-#Day Night difference -  Work only for 0 to 100 range!
-  Day_Night_gaping_graph <- ggplot(dblong2, aes(x = diff_sunset, y = biv_open_interval_perc)) +
-    geom_point(size = 0.1, alpha = 0.5, color = "gray") +
-    geom_smooth(data = subset(dblong2,diff_sunset>0), size = 1.5,color = "blue", se =T,fill="yellow")+ 
-    geom_smooth(data = subset(dblong2,diff_sunset<0), size = 1.5,color = "red",se =T,fill="yellow")+
-    geom_vline(xintercept = 0,linetype="dashed",color="black")+
-    scale_y_continuous(limits = c(0,100))+
-    scale_x_continuous(limits = c(-12,12),breaks = seq(-12,12,2))+
-    labs(title = "Bivalve Open Interval Percentage Over Time",
-         x = "Time",
-         y = "Bivalve Open Percentage") 
-Day_Night_gaping_graph
+#Day Night difference -  Works good!
 
+
+Day_Night_gaping_graph_zoom <- ggplot(dblong2, aes(x = diff_sunset, y = 
+                                                  biv_open_interval_perc,color=as.factor(Day_Night))) +
+    # geom_point(size = 0.1, alpha = 0.2) +
+    # geom_smooth( size = 1,color = "black",se =T,fill="gray")+
+    geom_spline(size = 1,color = "black")+
+    geom_vline(xintercept = 0,linetype="dashed",color="black",size = 1)+
+    coord_cartesian(ylim = c(30,50),xlim = c(-12,12))+
+    scale_y_continuous(breaks = seq(0,100,5))+
+    scale_x_continuous(breaks = seq(-12,12,2))+
+    labs(x = "Time",
+         y = "Gaping Percentage [%]") +
+    theme_bw()+
+    theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        strip.background = element_rect(fill="white",color="black", linewidth = 1.5, linetype="solid"),
+        legend.title = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_text(size = 8),
+        axis.text.x = element_text(size = 8, hjust = 1),
+        strip.text = element_text(size = 14),
+        legend.position = "none",
+        plot.background = element_rect(colour = "black", fill="white", size=3))
+Day_Night_gaping_graph_full <- ggplot(dblong2, aes(x = diff_sunset
+                                                   , y = 
+                                                  biv_open_interval_perc,color=as.factor(Day_Night))) +
+    geom_point(size = 0.1, alpha = 0.2) +
+    geom_smooth( size = 1.5,color = "black",se =T,fill="yellow")+
+    geom_vline(xintercept = 0,linetype="dashed",color="black",size = 2)+
+    coord_cartesian(ylim = c(0,100),xlim = c(-12,12))+
+    scale_y_continuous(breaks = seq(0,100,20))+
+    scale_x_continuous(breaks = seq(-12,12,2))+
+    labs(x = "Time from susnet [h]",
+         y = "Gaping Percentage [%]") +
+    guides(x = guide_axis(angle = 0))+
+    theme_bw()+
+    theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        strip.background = element_rect(fill="white",color="black", linewidth = 2.5, linetype="solid"),
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_text(size = 20),
+        axis.text.y = element_text(size = 14),
+        axis.text.x = element_text(size = 14, hjust = 1),
+        strip.text = element_text(size = 14),
+        legend.text = element_text(size = 14),
+        legend.title=element_blank(),
+        legend.key.size = unit(7,"cm"))
+Day_Night_gaping_graph_full + inset_element(Day_Night_gaping_graph_zoom,left = 0.65,bottom = 0.04,right = 1,top = 0.32)
 ```
 
 ##Correlations plot - bivalves and environmental
@@ -1002,13 +1106,13 @@ corr_plot <- ggarrange(biv_corr_plot,env_corr_plots[[1]],env_corr_plots[[2]],env
 ```
 
 
-##Opening times violin plot
+##Opening intervals closing defintion boxplot plot
 ```{r}
 bivalves_opening_times$limit <- as.factor(bivalves_opening_times$limit )
 opening_interval_sum$limit <-  as.factor(opening_interval_sum$limit )
 opening_interval_diff_closing_prec_plot <-        
                        ggplot(bivalves_opening_times,aes(x=limit,y=mean.opening.time))+
-                       geom_boxplot(width=0.3, color="black",fill="white") +
+                       geom_boxplot(width=0.4, color="black",fill="firebrick2") +
                        geom_point(data = opening_interval_sum,mapping = 
                                     aes(y=biv_open_interval_mean),color="blue",shape=18,size=4)+
                        geom_errorbar(data = opening_interval_sum,mapping = 
