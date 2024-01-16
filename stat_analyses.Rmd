@@ -5,14 +5,15 @@ date: "2023-12-27"
 output: html_document
 ---
 
-Packs.
+##Packs.
 ```{r}
 library(tidyverse)
 library(glmmTMB)
 library(openxlsx)
+library(DataExplorer)
 ```
 
-Load data
+##Load data
 ```{r}
 data <- readRDS("Bivalves_model_df.RDS")
 data_chl <- readRDS("Bivalves_model_chl_df.RDS")
@@ -28,6 +29,7 @@ data_chl <- data_chl %>% mutate(month=as.factor(month(as.POSIXct(group),label = 
 sensor_metadata <- read.xlsx("Bivalves and Environmental sensors Deploymnet Table.xlsx",sheet = "Sensors_Metadata")
 data <- merge(data,sensor_metadata,by = c("Deployment.number","Bivalve.number"),all.x = T)
 data_chl <- merge(data_chl,sensor_metadata,by = c("Deployment.number","Bivalve.number"),all.x = T)
+# create_report(data)
 ```
 
 #GLMMs
