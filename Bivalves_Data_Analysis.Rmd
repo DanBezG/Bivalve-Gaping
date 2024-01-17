@@ -99,7 +99,7 @@ split_rows_by_hours_tal <- function(row) {
 ```{r}
 library(tidyverse)
 library(lubridate)
-library(openxlsx)
+  library(openxlsx)
 library(scales)
 library(Hmisc) # for function rcorr
 library(StreamMetabolism) #for getting sunrise and sunset
@@ -717,11 +717,15 @@ write.csv(env_month,"Environmental_data_by_month.csv")
 
 ##Tal Amit's Data analysis
 ```{r}
-tal_spring <- read.csv("Gaping data Tal Amit Fall.csv")
-#Filtering only the right rows and columns
+tal_spring <- read.csv("Gaping data Tal Amit_Fall.csv")
+#Filtering only the right rows and columns - only relevent to fall
 tal_spring <- tal_spring[1:495,]
+#for spring
 tal_spring <- tal_spring %>% select(-Sunset.time,-Sunrise.time,-Time.from.sunrise)
+#for fall
+tal_spring <- tal_spring %>% select(-Leg.in.the.day,-duration,-Percentage.from.the.time)
 tal_spring$Date <- as.Date(tal_spring$Date,format="%d.%m.%Y")
+
 #new df with distinct hours
 tal_spring_new <-data.frame(Date=Date(),
                             Time.Start = character(),
@@ -751,14 +755,33 @@ tal_spring_new$Time.end <- as.POSIXct(tal_spring_new$Time.end, format = "%H:%M:%
 tal_spring_new$Duration <- difftime(tal_spring_new$Time.end, tal_spring_new$Time.Start,units = "mins")
 tal_spring_new$hour_ratio <- as.numeric(tal_spring_new$Duration)/60
 tal_spring_new$Hour <- format(tal_spring_new$Time.Start,format = "%H")
+tal_spring_new$ThreeHour_bin <-  cut(tal_spring_new$Time.Start, breaks= "3 hours")
+tal_spring_new$ThreeHour_ratio <- as.numeric(tal_spring_new$Duration)/180
 #Filter the wide open and sum
-tal_sum_by_hour <- tal_spring_new[tal_spring_new$Open.precentage==1,]
-tal_sum_by_hour <- tal_sum_by_hour %>%group_by(bivalve.code,Hour,Date) %>%  summarise(open_hour_ratio=sum(hour_ratio))
-write.csv(tal_sum_by_hour,"Gaping data Tal Amit Fall_sum_by_hour.csv")
+tal_open <- tal_spring_new[tal_spring_new$status==1 ,]
+tal_sum_by_hour <- tal_open %>%group_by(bivalve.code,Hour,Date) %>%  summarise(open_hour_ratio=sum(hour_ratio))
+tal_sum_by_threehour <- tal_open %>%group_by(bivalve.code,ThreeHour_bin,Date) %>%  summarise(open_hour_ratio=sum(ThreeHour_ratio))
+tal_sum_of_hours <- tal_sum_by_hour %>%
+  group_by(Hour) %>%
+  summarise_at(vars(open_hour_ratio),funs(mean,median,n(),sd)) %>% 
+  mutate(conf_int = sd/sqrt(n) * qt(p = 0.975,df = n-1))
+tal_sum_of_3hours <- tal_sum_by_threehour %>%
+  group_by(ThreeHour_bin) %>%
+  summarise_at(vars(open_hour_ratio),funs(mean,median,n(),sd)) %>% 
+  mutate(conf_int = sd/sqrt(n) * qt(p = 0.975,df = n-1))
 
-
-tal_fall <- read.csv("Gaping data Tal Amit Fall.csv")
-tal_fall <- tal_fall[1:495,]
+excel <- createWorkbook()
+addWorksheet(excel,sheetName = "Gaping data Tal Amit Fall_new")
+addWorksheet(excel,sheetName = "Gaping sum by hour")
+addWorksheet(excel,sheetName = "Gaping sum by 3hour")
+addWorksheet(excel,sheetName = "Gaping 1 hour stat")
+addWorksheet(excel,sheetName = "Gaping 3 hour stat")
+writeData(excel,sheet = "Gaping data Tal Amit Fall_new",x = tal_spring_new)
+writeData(excel,sheet = "Gaping sum by hour",x = tal_sum_by_hour)
+writeData(excel,sheet = "Gaping sum by 3hour",x = tal_sum_by_threehour)
+writeData(excel,sheet = "Gaping 1 hour stat",x = tal_sum_of_hours)
+writeData(excel,sheet = "Gaping 3 hour stat",x = tal_sum_of_3hours)
+saveWorkbook(excel,"Gaping data Tal Amit Fall_new.xlsx")
 ```
 
 ##FFT calc
